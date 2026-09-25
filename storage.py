@@ -1,7 +1,7 @@
 """Persistent, validated health records. No network or Bluetooth side effects."""
 import csv
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import io
 import json
@@ -28,6 +28,10 @@ CSV_FIELDS = ["user_id", "device_id", "slot", "measured_at", "kind", *METRICS, "
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def sync_day(when=None):
+    return datetime.fromisoformat(when or now()).astimezone(timezone(timedelta(hours=9))).date().isoformat()
 
 
 def text(value, field, maximum=100):
@@ -114,6 +118,8 @@ class Store:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, config TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS automatic_sync_days(
+                    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS pairing(address TEXT PRIMARY KEY, key TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS measurements(
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE,
@@ -301,7 +307,10 @@ class Store:
             result = [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")]
             if not include_archived:
                 result = [d for d in result if not d.get("archived", False)]
+            completed = {r['device_id']: r['completed_at'] for r in db.execute('SELECT * FROM automatic_sync_days')}
+            today = sync_day()
             for device in result:
+                device['automatic_synced_today'] = sync_day(completed[device['id']]) == today if device['id'] in completed else False
                 device.setdefault("sync_mode", "listen" if device["transport"] == "homehub" else "interval")
                 device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
         return result
@@ -584,6 +593,7 @@ class Store:
             return {"format": "QnapSelfCare", "schema": 1, "created_at": now(),
                     "users": [dict(r) for r in db.execute("SELECT * FROM users")],
                     "devices": [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")],
+                    "automatic_sync_days": [dict(r) for r in db.execute('SELECT * FROM automatic_sync_days')],
                     "wellness_profiles": [dict(json.loads(r['config']), user_id=r['user_id'])
                                           for r in db.execute('SELECT * FROM wellness_profiles')],
                     "activity_days": [dict(json.loads(r['config']), user_id=r['user_id']) for r in db.execute('SELECT * FROM activity_days')],
@@ -618,6 +628,14 @@ class Store:
                     config["archived"] = True
                 db.execute("INSERT INTO devices VALUES(?,?)", (did, json.dumps(config)))
                 device_map[did] = config
+            daily = backup.get('automatic_sync_days', [])
+            if not isinstance(daily, list) or len(daily) > len(devices):
+                raise ValueError('自動同期履歴が不正です')
+            for item in daily:
+                if not isinstance(item, dict) or set(item) != {'device_id', 'completed_at'} or item['device_id'] not in device_map:
+                    raise ValueError('自動同期履歴の機器が不正です')
+                db.execute('INSERT INTO automatic_sync_days VALUES(?,?)',
+                           (item['device_id'], timestamp(item['completed_at'])))
             for record in records:
                 normalized = self.validate_record(record, user_ids, device_map, record.get("source", "backup"))
                 normalized["id"] = identifier(record.get("id"), "記録ID")
@@ -683,7 +701,13 @@ class Store:
             db.execute("DELETE FROM jobs WHERE state NOT IN ('queued','running') AND id NOT IN (SELECT id FROM jobs ORDER BY created_at DESC,rowid DESC LIMIT 200)")
         return identifier
 
-    def update_job(self, identifier, state, message="", result=None):
+    def update_job(self, identifier, state, message="", result=None, automatic=False):
+        finished = now() if state in ('done', 'failed', 'skipped') else None
         with self.connect() as db:
             db.execute("UPDATE jobs SET state=?,finished_at=?,message=?,result=? WHERE id=?",
-                       (state, now() if state in ("done", "failed", "skipped") else None, message[:2000], json.dumps(result) if result is not None else None, identifier))
+                       (state, finished, message[:2000], json.dumps(result) if result is not None else None, identifier))
+            if automatic and state == 'done':
+                job = db.execute("SELECT device_id FROM jobs WHERE id=? AND action='sync'", (identifier,)).fetchone()
+                if job and job['device_id']:
+                    db.execute('INSERT INTO automatic_sync_days VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
+                               (job['device_id'], finished))
