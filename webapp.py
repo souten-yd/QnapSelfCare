@@ -7,6 +7,9 @@ from pathlib import Path
 import platform
 import re
 import signal
+import shutil
+import sqlite3
+import zipfile
 import threading
 from urllib.parse import parse_qs, urlsplit
 
@@ -14,9 +17,11 @@ import updater
 from self_update import UpdateManager, UpdateConflict
 from collectors import CollectorManager
 from storage import CSV_FIELDS, Store, integer
+from durability import DataUnavailable, file_lock
+from protection import ProtectionManager
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -44,10 +49,10 @@ class Handler(BaseHTTPRequestHandler):
     def store(self):
         return self.server.store
 
-    def _send(self, status, body, mime="application/json; charset=utf-8", filename=None):
+    def _headers(self, status, size, mime, filename=None):
         self.send_response(status)
         self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
@@ -56,6 +61,9 @@ class Handler(BaseHTTPRequestHandler):
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
+
+    def _send(self, status, body, mime="application/json; charset=utf-8", filename=None):
+        self._headers(status, len(body), mime, filename)
         self.wfile.write(body)
 
     def _json(self, status, value):
@@ -67,9 +75,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self.get()
-        except (ValueError, TypeError) as error:
+        except (ValueError, TypeError, KeyError, zipfile.BadZipFile) as error:
             self._json(400, {"error": str(error)})
-        except (OSError, json.JSONDecodeError) as error:
+        except (OSError, sqlite3.DatabaseError, DataUnavailable) as error:
             self._json(503, {"error": f"読み込みに失敗しました: {error}"})
 
     def get(self):
@@ -78,6 +86,7 @@ class Handler(BaseHTTPRequestHandler):
         static = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                  "/protection.js": ("protection.js", "text/javascript; charset=utf-8"),
                   "/update.js": ("update.js", "text/javascript; charset=utf-8"),
                   "/icon.svg": ("icon.svg", "image/svg+xml")}
         if path in static:
@@ -86,8 +95,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             self._json(200, {"version": VERSION, "architecture": architecture(),
                              "bluetooth_adapters": bluetooth_adapters(),
-                             "record_count": self.store.records(limit=0)["total"],
-                             "collection_enabled": any(d["auto_sync"] for d in self.store.devices()),
+                             "record_count": None if self.store.error else self.store.records(limit=0)["total"],
+                             "recovery_required": bool(self.store.error),
+                             "database_error": self.store.error,
+                             "collection_enabled": False if self.store.error else any(d["auto_sync"] for d in self.store.devices()),
                              "data_path": str(self.store.path)})
         elif path == "/api/users":
             self._json(200, self.store.users())
@@ -100,7 +111,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/jobs":
             self._json(200, self.store.jobs())
         elif path == "/api/diagnostics":
-            self._json(200, self.server.collector.diagnostics())
+            result = self.server.protection.diagnostics()
+            result.update(self.server.collector.diagnostics())
+            self._json(200, result)
+        elif path == "/api/protection":
+            self._json(200, self.server.protection.status())
+        elif path == "/api/protection/download":
+            name = query.get('name', [''])[0]
+            with self.server.protection.download(name) as stream:
+                self._headers(200, os.fstat(stream.fileno()).st_size, 'application/zip', name)
+                shutil.copyfileobj(stream, self.wfile, 1024 * 1024)
         elif path == "/api/export.csv":
             self._send(200, self.store.export_csv(**self._filters(query)).encode(), "text/csv; charset=utf-8", "selfcare-records.csv")
         elif path == "/api/template.csv":
@@ -148,7 +168,21 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             path = urlsplit(self.path).path
             if method == "POST":
-                if path == "/api/update/apply":
+                if path == "/api/protection/settings":
+                    self._json(200, self.server.protection.save_settings(body))
+                    return
+                elif path == "/api/protection/backup":
+                    if body:
+                        raise ValueError('追加の引数は指定できません')
+                    self._json(202, self.server.protection.request_backup())
+                    return
+                elif path == "/api/protection/verify":
+                    if body:
+                        raise ValueError('追加の引数は指定できません')
+                    self._json(202, self.server.protection.request_verification())
+                    return
+                elif path == "/api/update/apply":
+                    self.store.require_available()
                     if set(body) != {"version"}:
                         raise ValueError("versionのみ指定してください。任意のURL・コマンドは実行できません")
                     self._json(202, self.server.updates.apply(body["version"]))
@@ -181,6 +215,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, result)
         except PermissionError as error:
             self._json(403, {"error": str(error)})
+        except (DataUnavailable, sqlite3.DatabaseError) as error:
+            self._json(503, {"error": str(error)})
         except UpdateConflict as error:
             self._json(409, {"error": str(error)})
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
@@ -196,17 +232,26 @@ def main():
     parser.add_argument("--data-dir", default=os.environ.get("SELFCARE_DATA_DIR", "/share/Container/QnapSelfCare"))
     args = parser.parse_args()
     os.umask(0o077)
-    store = Store(Path(args.data_dir) / "data")
+    # Also held by the offline restore command: never replace a database in active use.
+    with file_lock(Path(args.data_dir) / 'service.lock'):
+        serve(args)
+
+
+def serve(args):
+    store = Store(Path(args.data_dir) / "data", state_directory=args.data_dir)
     collector = CollectorManager(store)
+    protection = ProtectionManager(store)
     with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
-        server.store, server.collector = store, collector
+        server.store, server.collector, server.protection = store, collector, protection
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()
+        protection.start()
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
         print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)
         try:
             server.serve_forever()
         finally:
+            protection.close()
             collector.close()
 
 

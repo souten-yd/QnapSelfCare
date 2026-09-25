@@ -6,15 +6,14 @@ import os
 from pathlib import Path
 import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 import uuid
 
 import updater
+from durability import write_json, snapshot
 
 ACTIVE = {'queued', 'checking', 'downloading', 'backup', 'installing', 'verifying'}
 GETCFG = '/sbin/getcfg'
@@ -25,19 +24,6 @@ VERIFY_TIMEOUT = 120
 
 class UpdateConflict(ValueError):
     pass
-
-
-def write_json(path, value):
-    path = Path(path)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as output:
-        temporary = Path(output.name)
-        try:
-            json.dump(value, output, ensure_ascii=False)
-            output.flush()
-            os.fsync(output.fileno())
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
 
 
 def read_json(path):
@@ -155,7 +141,7 @@ class UpdateManager:
             job = self.directory / identifier
             job.mkdir(mode=0o700)
             # Snapshot executable code outside the installation being replaced.
-            for name in ('self_update.py', 'updater.py'):
+            for name in ('self_update.py', 'updater.py', 'durability.py'):
                 shutil.copyfile(self.install_root / name, job / name)
             request = dict(id=identifier, current=self.current, target=expected, arch=self.arch,
                            data_root=str(self.data_root), install_root=str(self.install_root), port=self.port)
@@ -187,15 +173,7 @@ def backup_data(data_root, job):
         raise ValueError('測定DBが見つからないため更新を中止しました')
     backup = job / 'backup'
     backup.mkdir(mode=0o700)
-    # Online SQLite backup gives a consistent snapshot even while collection is finishing.
-    with sqlite3.connect(source) as db, sqlite3.connect(backup / source.name) as target:
-        deadline = time.monotonic() + 120
-        def progress(*_):
-            if time.monotonic() > deadline:
-                raise ValueError('DBバックアップが時間内に終了しませんでした')
-        db.backup(target, pages=256, progress=progress)
-        if target.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-            raise ValueError('DBバックアップの検証に失敗しました')
+    snapshot(source, backup / source.name)
     if (Path(data_root) / 'config').is_dir():
         shutil.copytree(Path(data_root) / 'config', backup / 'config')
     return str(backup)

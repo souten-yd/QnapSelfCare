@@ -11,6 +11,9 @@ from pathlib import Path
 import re
 import sqlite3
 import uuid
+import threading
+
+from durability import (CorruptDatabase, DataUnavailable, check_database, corruption, write_json)
 
 MODELS = {"HEM-6232T": 2, "HBF-228T": 4}
 METRICS = {"systolic": (1, 350), "diastolic": (1, 250), "pulse": (1, 300),
@@ -63,10 +66,46 @@ def timestamp(value):
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, state_directory=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / "measurements.sqlite3"
+        self.lock = threading.RLock()
+        self.error = None
+        state_directory = Path(state_directory) if state_directory is not None else self.directory
+        self.guard = state_directory / 'database.guard.json'
+        self.marker = state_directory / 'database.initialized.json'
+        self.pending_restore = state_directory / 'restore.pending.json'
+        self._initializing = True
+        try:
+            if self.pending_restore.exists() or self.guard.exists():
+                raise CorruptDatabase('保護モードです。診断を確認し、停止中に検証済みバックアップから復旧してください')
+            if self.path.exists():
+                check_database(self.path)
+            elif self.marker.exists() or any((state_directory / 'backups').glob('selfcare-*.zip')):
+                raise CorruptDatabase('以前の測定DBが見つかりません。空のDBは作成しません')
+            self._initialize()
+            write_json(self.marker, {'schema': 1})
+        except (CorruptDatabase, DataUnavailable, sqlite3.DatabaseError, OSError) as error:
+            self.error = str(error)
+            if isinstance(error, CorruptDatabase) or corruption(error):
+                self.protect(self.error)
+        finally:
+            self._initializing = False
+
+    def protect(self, message):
+        with self.lock:
+            self.error = message
+            try:
+                write_json(self.guard, {'message': message, 'detected_at': now()})
+            except OSError:
+                pass  # In-memory gate still blocks writes when the volume is full/read-only.
+
+    def require_available(self):
+        if self.error:
+            raise DataUnavailable('保存先を保護しています: ' + self.error)
+
+    def _initialize(self):
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript('''
@@ -94,14 +133,28 @@ class Store:
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=15)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
+        with self.lock:
+            self.require_available()
+            db = None
+            try:
+                if not self._initializing and (not self.path.exists() or self.path.stat().st_size == 0):
+                    self.protect('測定DBが消失または空になりました。新規作成を停止しました')
+                    self.require_available()
+                uri = self.path.resolve().as_uri() + ('?mode=rwc' if self._initializing else '?mode=rw')
+                db = sqlite3.connect(uri, uri=True, timeout=15)
+                db.row_factory = sqlite3.Row
+                db.execute("PRAGMA foreign_keys=ON")
+                db.execute("PRAGMA synchronous=FULL")
+                with db:
+                    yield db
+            except sqlite3.DatabaseError as error:
+                if corruption(error):
+                    self.protect('測定DBの破損を検出しました。元のDBを保持しています')
+                    raise DataUnavailable(self.error) from error
+                raise
+            finally:
+                if db is not None:
+                    db.close()
 
     def users(self):
         with self.connect() as db:

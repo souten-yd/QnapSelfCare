@@ -38,16 +38,16 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile storage.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py
+      - run: python -m py_compile storage.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: npm test
-      - run: node --check web/app.js && node --check web/update.js
+      - run: node --check web/app.js && node --check web/update.js && node --check web/protection.js
       - run: python -m py_compile webapp.py
       - run: sh -n qpkg/shared/selfcare.sh scripts/install-ble.sh bluetooth/entrypoint.sh
-      - run: sh -n qpkg/shared/selfcare-update qpkg/shared/python3-path
+      - run: sh -n qpkg/shared/selfcare-backup qpkg/shared/selfcare-update qpkg/shared/python3-path
       - name: Install pinned QDK
         run: |
           curl --fail --location --retry 3 --output /tmp/qdk.deb https://github.com/qnap-dev/QDK/releases/download/v2.5.3/qdk_2.5.3_amd64.deb
@@ -61,12 +61,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.1 >/dev/null 2>&1; then
-            echo 'Release v0.3.1 already exists; leaving it unchanged.'
+          if gh release view v0.3.2 >/dev/null 2>&1; then
+            echo 'Release v0.3.2 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.1 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.1' \
-            --notes 'Adds the Web Update button: NAS-side verified QPKG download, private database/config backup, installation and restart/version checks. Detached worker survives Web restarts without nohup, records progress/logs, rejects duplicate updates and refuses arbitrary URLs/commands. Existing health records, Bluetooth setup and ports are retained. From 0.3.0, install this version once via App Center; future updates use the button. QNAP hardware self-update still requires real-device validation.' \
+          gh release create v0.3.2 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.2' \
+            --notes 'Adds verified scheduled SQLite/config backups (weekly, 14 generations by default), retention controls, manual backup and re-verification, private downloads, database/disk/backup/radio diagnostics, corruption protection and offline recovery that preserves original data. Existing 0.3.1 installations can apply this release with the Web Update button. Backups include app pairing keys; preserve HomeHub BlueZ data separately and keep an off-NAS copy. NAS hardware validation remains required.' \
             --target "$GITHUB_SHA"

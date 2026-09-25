@@ -16,7 +16,8 @@ class WebAppTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), webapp.Handler)
-        self.server.store = Store(self.tmp.name)
+        self.server.store = Store(Path(self.tmp.name) / "data", state_directory=self.tmp.name)
+        self.server.protection = webapp.ProtectionManager(self.server.store)
         self.server.collector = Mock()
         self.server.collector.diagnostics.return_value = {'mode': 'homehub'}
         self.server.updates = Mock()
@@ -104,6 +105,41 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             self.request('/api/update/apply', {'version':'v0.3.2'})
         self.assertEqual(error.exception.code, 409)
+
+    def test_protection_settings_require_header_and_backup_download_is_verified(self):
+        value = {'enabled': False, 'interval_hours': 12, 'keep': 7}
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/protection/settings', value, header=False)
+        self.assertEqual(error.exception.code, 403)
+        with self.request('/api/protection/settings', value) as response:
+            self.assertEqual(json.load(response)['settings'], value)
+        name = self.server.protection.run_backup()
+        self.assertIsNotNone(name)
+        with self.request('/api/protection/download?name=' + name) as response:
+            self.assertEqual(response.headers['Content-Type'], 'application/zip')
+            self.assertIn(name, response.headers['Content-Disposition'])
+            self.assertTrue(response.read().startswith(b'PK'))
+        with self.request('/api/protection/verify', {}) as response:
+            self.assertEqual(response.status, 202)
+        with self.assertRaises(HTTPError):
+            self.request('/api/protection/download?name=../../etc/passwd')
+
+    def test_diagnostics_and_protection_remain_available_when_database_corrupt(self):
+        self.server.store.path.write_bytes(b'corrupt')
+        with self.request('/api/diagnostics') as response:
+            result = json.load(response)
+            self.assertTrue(result['recovery_required'])
+            self.assertEqual(result['checks'][0]['level'], 'error')
+        for route in ('/', '/protection.js', '/api/protection', '/api/status'):
+            with self.request(route) as response:
+                self.assertEqual(response.status, 200)
+        with self.request('/api/status') as response:
+            self.assertIsNone(json.load(response)['record_count'])
+        for route, body in (('/api/users', {'name': 'Bad'}), ('/api/protection/backup', {})):
+            with self.assertRaises(HTTPError) as error:
+                self.request(route, body)
+            self.assertEqual(error.exception.code, 503)
+        self.assertEqual(self.server.store.path.read_bytes(), b'corrupt')
 
 if __name__ == '__main__':
     unittest.main()
