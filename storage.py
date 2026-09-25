@@ -16,6 +16,7 @@ import threading
 from durability import (CorruptDatabase, DataUnavailable, check_database, corruption, write_json)
 import omron_csv
 import wellness
+import energy
 
 MODELS = {"HEM-6232T": 2, "HBF-228T": 4}
 METRICS = {"systolic": (1, 350), "diastolic": (1, 250), "pulse": (1, 300),
@@ -133,6 +134,13 @@ class Store:
                     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     created_at TEXT NOT NULL, note TEXT NOT NULL, calories REAL);
                 CREATE INDEX IF NOT EXISTS meal_notes_user_time ON meal_notes(user_id,created_at);
+                CREATE TABLE IF NOT EXISTS activity_days(
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    day TEXT NOT NULL, config TEXT NOT NULL, PRIMARY KEY(user_id,day));
+                CREATE TABLE IF NOT EXISTS weight_plans(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL, config TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ai_settings(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
                 PRAGMA user_version=1;
             ''')
@@ -198,6 +206,10 @@ class Store:
         if not isinstance(payload, dict) or set(payload) - (set(wellness.DEFAULT) - {'plan_updated_at'}):
             raise ValueError('健康設定の項目が不正です')
         result = wellness.validate(dict(current, **payload))
+        with self.connect() as db:
+            has_plan = db.execute('SELECT 1 FROM weight_plans WHERE user_id=?', (user_id,)).fetchone()
+        if has_plan and any(result[k] != current[k] for k in ('goal_weight_kg', 'goal_date')):
+            raise ValueError('目標は「週次の減量計画」で修正してください。変更履歴を保存します')
         if 'plan_text' in payload and result['plan_text'] != current['plan_text']:
             result['plan_updated_at'] = now()
         with self.connect() as db:
@@ -236,6 +248,53 @@ class Store:
         # The latest 2000 records suffice for current trends without exporting full history.
         records = self.records(user_id=user_id, limit=2000)['records']
         return wellness.summarize(profile, records, self.meals(user_id, 100))
+
+    def energy_report(self, user_id):
+        profile = self.wellness_profile(user_id)
+        with self.connect() as db:
+            # All weight history, not the paginated measurement screen's last 2000 rows.
+            records = [self.unpack(r) for r in db.execute(
+                "SELECT * FROM measurements WHERE user_id=? AND kind='body_composition' ORDER BY measured_at", (user_id,))]
+            diaries = [json.loads(r[0]) for r in db.execute(
+                'SELECT config FROM activity_days WHERE user_id=? ORDER BY day', (user_id,))]
+            plans = [dict(json.loads(r['config']), id=r['id'], created_at=r['created_at']) for r in db.execute(
+                'SELECT * FROM weight_plans WHERE user_id=? ORDER BY id', (user_id,))]
+        return energy.report(profile, records, diaries, plans)
+
+    def save_activity(self, user_id, payload):
+        self.wellness_profile(user_id)
+        value = energy.diary(payload)
+        with self.connect() as db:
+            db.execute('INSERT INTO activity_days VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET config=excluded.config',
+                       (user_id, value['date'], json.dumps(value, ensure_ascii=False)))
+        return value
+
+    def delete_activity(self, user_id, day):
+        self.wellness_profile(user_id)
+        energy.day(day)
+        with self.connect() as db:
+            if not db.execute('DELETE FROM activity_days WHERE user_id=? AND day=?', (user_id, day)).rowcount:
+                raise ValueError('活動記録が見つかりません')
+
+    def save_weight_plan(self, user_id, payload):
+        value = energy.plan(payload)
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+                raise ValueError('利用者が見つかりません')
+            previous = db.execute('SELECT config FROM weight_plans WHERE user_id=? ORDER BY id DESC LIMIT 1', (user_id,)).fetchone()
+            if previous and value['start_date'] < json.loads(previous[0])['start_date']:
+                raise ValueError('修正計画の開始日は前の計画以降にしてください')
+            if previous and not value['reason'].strip():
+                raise ValueError('計画の見直し理由を入力してください')
+            db.execute('INSERT INTO weight_plans(user_id,created_at,config) VALUES(?,?,?)',
+                       (user_id, now(), json.dumps(value, ensure_ascii=False)))
+            row = db.execute('SELECT config FROM wellness_profiles WHERE user_id=?', (user_id,)).fetchone()
+            profile = wellness.validate(json.loads(row[0]) if row else {})
+            profile.update(goal_weight_kg=value['goal_weight'], goal_date=value['goal_date'], plan_updated_at=now())
+            db.execute('INSERT INTO wellness_profiles VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET config=excluded.config',
+                       (user_id, json.dumps(profile, ensure_ascii=False)))
+        return value
 
     def devices(self, include_archived=False):
         with self.connect() as db:
@@ -527,6 +586,8 @@ class Store:
                     "devices": [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")],
                     "wellness_profiles": [dict(json.loads(r['config']), user_id=r['user_id'])
                                           for r in db.execute('SELECT * FROM wellness_profiles')],
+                    "activity_days": [dict(json.loads(r['config']), user_id=r['user_id']) for r in db.execute('SELECT * FROM activity_days')],
+                    "weight_plans": [dict(json.loads(r['config']), user_id=r['user_id'], created_at=r['created_at']) for r in db.execute('SELECT * FROM weight_plans ORDER BY id')],
                     "meal_notes": [dict(r) for r in db.execute('SELECT * FROM meal_notes')],
                     "ai_settings": (json.loads(value[0]) if (value := db.execute('SELECT config FROM ai_settings WHERE id=1').fetchone()) else None),
                     "deleted": [r[0] for r in db.execute("SELECT fingerprint FROM deleted_measurements")],
@@ -580,6 +641,19 @@ class Store:
                 calories = wellness.number(item.get('calories'), 0, 10000, '目安カロリー', True)
                 db.execute('INSERT INTO meal_notes VALUES(?,?,?,?,?)',
                            (mid, item['user_id'], timestamp(item.get('created_at')), meal, calories))
+            for table, validator in [('activity_days', energy.diary), ('weight_plans', energy.plan)]:
+                items = backup.get(table, [])
+                if not isinstance(items, list) or len(items) > 100000:
+                    raise ValueError('活動・計画履歴の形式または件数が不正です')
+                for item in items:
+                    if not isinstance(item, dict) or item.get('user_id') not in user_ids:
+                        raise ValueError('活動・計画の利用者が不正です')
+                    value = validator({k: v for k, v in item.items() if k not in ('user_id', 'created_at')})
+                    if table == 'activity_days':
+                        db.execute('INSERT INTO activity_days VALUES(?,?,?)', (item['user_id'], value['date'], json.dumps(value, ensure_ascii=False)))
+                    else:
+                        db.execute('INSERT INTO weight_plans(user_id,created_at,config) VALUES(?,?,?)',
+                                   (item['user_id'], timestamp(item.get('created_at')), json.dumps(value, ensure_ascii=False)))
             if backup.get('ai_settings') is not None:
                 from wellness_ai import validate as validate_ai
                 db.execute('INSERT INTO ai_settings VALUES(1,?)', (json.dumps(validate_ai(backup['ai_settings'])),))
