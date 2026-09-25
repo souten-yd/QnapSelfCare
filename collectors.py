@@ -38,11 +38,11 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.socket_path)
 
 
-def bridge_request(path, payload=None):
-    connection = UnixHTTPConnection(path, timeout=320 if payload else 3)
+def bridge_request(path, payload=None, endpoint=None):
+    connection = UnixHTTPConnection(path, timeout=5 if endpoint == "/watch" else 320 if payload else 3)
     try:
         body = json.dumps(payload).encode() if payload else None
-        connection.request("POST" if payload else "GET", "/run" if payload else "/health", body,
+        connection.request("POST" if payload else "GET", endpoint or ("/run" if payload else "/health"), body,
                            {"Content-Type": "application/json"})
         response = connection.getresponse()
         data = json.loads(response.read(4 * 1024 * 1024))
@@ -96,6 +96,11 @@ class CollectorManager:
         self.pending = set()
         self.next_attempt = {}
         self.next_scan = 0
+        self.next_watch = 0
+        self.watch_configured = False
+        self.listen_error = None
+        self.listen_ready = False
+        self.listen_seen = {}
         self.scan_group = 0
         self.watch_error = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
@@ -204,11 +209,55 @@ class CollectorManager:
             if device:
                 self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
 
+    def listen(self):
+        if time.monotonic() < self.next_watch:
+            return
+        self.next_watch = time.monotonic() + 2
+        devices = [d for d in self.store.devices() if d['auto_sync'] and d['paired'] and d['bindings']
+                   and d.get('sync_mode', 'interval') == 'listen' and d['transport'] == 'homehub']
+        if not devices and not self.watch_configured:
+            self.listen_ready = False
+            self.listen_error = None
+            return
+        try:
+            adapters = {d['adapter'] for d in devices}
+            if len(adapters) > 1:
+                raise ValueError('共通Bluetoothの待ち受けは同じアダプターに設定してください')
+            adapter = next(iter(adapters), getattr(self, 'listen_adapter', 'hci0'))
+            result = bridge_request(HOMEHUB_SOCKET, {'adapter': adapter, 'addresses': sorted({d['address'] for d in devices})}, endpoint='/watch')
+            if not result.get('supported'):
+                raise ValueError('QnapHomeHubを0.3.5以降へ更新してください')
+            self.watch_configured = bool(devices)
+            self.listen_adapter = adapter
+            self.listen_ready = bool(result.get('ready'))
+            self.listen_error = result.get('error')
+            events = {e['address']: e['at'] for e in result.get('events', [])}
+            self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in {d['id'] for d in devices}}
+            for device in devices:
+                event = events.get(device['address'])
+                if event is None or event <= self.listen_seen.get(device['id'], 0):
+                    continue
+                if time.monotonic() < self.next_attempt.get(device['id'], 0):
+                    continue
+                try:
+                    self.submit('sync', device['id'], automatic=True)
+                    self.listen_seen[device['id']] = event
+                    self.next_attempt[device['id']] = time.monotonic() + device['interval']
+                except ValueError:
+                    pass
+        except Exception as error:
+            self.listen_ready = False
+            self.listen_error = '待ち受けに接続できません。HomeHub 0.3.5以降を確認してください: ' + str(error)
+            self.next_watch = time.monotonic() + 10
+
     def schedule(self):
+        self.listen()
         if time.monotonic() < self.next_scan:
             return
         eligible = []
         for device in self.store.devices():
+            if device.get("sync_mode", "interval") != "interval":
+                continue
             if not (device["auto_sync"] and device["paired"] and device["bindings"] and (device["transport"] == "homehub" or device["exclusive"])):
                 continue
             if time.monotonic() >= self.next_attempt.get(device["id"], 0):
@@ -268,6 +317,10 @@ class CollectorManager:
             finally:
                 self.queue.task_done()
 
+    def listener_status(self):
+        return {'ready': self.listen_ready, 'error': self.listen_error,
+                'configured': self.watch_configured, 'busy': bool(self.pending)}
+
     def diagnostics(self):
         root = self.store.directory.parent
         bridge = root / "run/ble.sock"
@@ -276,7 +329,7 @@ class CollectorManager:
                   "bleak": bool(importlib.util.find_spec("bleak")) or (root / "python/bleak").is_dir(),
                   "worker_alive": self.thread.is_alive(), "collection_paused": bool(self.store.error),
                   "data_path": str(self.store.path),
-                  "watch_error": self.watch_error,
+                  "watch_error": self.watch_error, "listener": self.listener_status(),
                   "hardware_verified": False}
         devices = [] if self.store.error else self.store.devices()
         shared = not devices or any(d['transport'] == 'homehub' for d in devices)

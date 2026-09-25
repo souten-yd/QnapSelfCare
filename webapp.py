@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.13"
+VERSION = "0.3.14"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -120,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.store.records(**self._filters(query),
                 limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),
                 offset=integer(query.get("offset", ["0"])[0], "開始位置", 0, 10000000)))
+        elif path == "/api/listener":
+            self._json(200, self.server.collector.listener_status())
         elif path == "/api/jobs":
             self._json(200, self.store.jobs())
         elif path == "/api/diagnostics":
@@ -222,10 +224,12 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) != {'provider', 'key'}:
                         raise ValueError('接続先とAPIキーを指定してください')
                     result = self.server.coach.set_key(body['provider'], body['key'])
+                elif path == '/api/ai/test':
+                    result = self.server.coach.test_connection()
                 elif path == '/api/ai/consult':
-                    if set(body) != {'user_id', 'mode', 'question', 'consent'}:
+                    if set(body) not in ({'user_id', 'mode', 'question'}, {'user_id', 'mode', 'question', 'consent'}):
                         raise ValueError('相談内容を指定してください')
-                    result = self.server.coach.consult(body['user_id'], body['mode'], body['question'], body['consent'])
+                    result = self.server.coach.consult(body['user_id'], body['mode'], body['question'])
                 elif path == "/api/devices":
                     result = self.store.save_device(body)
                 elif path == "/api/records":

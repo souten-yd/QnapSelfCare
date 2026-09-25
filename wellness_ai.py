@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import socket
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
@@ -30,9 +32,9 @@ def validate(settings):
         raise ValueError('モデル名が不正です')
     if provider == 'openrouter':
         base = 'https://openrouter.ai/api/v1'
-    elif provider == 'qnapassistant':
+    elif provider == 'qnapassistant' and not base:
         base = 'http://127.0.0.1:11435/v1'
-    elif base:
+    if provider != 'openrouter' and base:
         url = urlsplit(base)
         host = url.hostname or ''
         try:
@@ -97,11 +99,9 @@ class Coach:
                     temporary.unlink(missing_ok=True)
         return {'provider': provider, 'key_configured': path.exists()}
 
-    def consult(self, user_id, mode, question, consent):
+    def consult(self, user_id, mode, question, consent=None):
         if mode not in MODES or not isinstance(question, str) or not 1 <= len(question.strip()) <= 2000:
             raise ValueError('相談内容または種類が不正です')
-        if consent is not True:
-            raise ValueError('選択したAIへの送信を確認してください')
         config = self.settings()
         if not config['base_url']:
             raise ValueError('ControlDeckのNASから到達できる接続先を設定してください')
@@ -113,13 +113,26 @@ class Coach:
                    'estimated_bmr_kcal', 'weight_change_7d_kg', 'weekly_change_needed_kg', 'notices')},
                    'goal': {'weight_kg': profile['goal_weight_kg'], 'date': profile['goal_date']},
                    'saved_plan': profile['plan_text'][:3000], 'recent_meals': recent_meals}
-        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 900,
+        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 600,
                   'messages': [{'role': 'system', 'content':
                       'あなたは健康記録・食事・減量計画の整理を支援します。診断、治療、薬の変更や断定的なカロリー処方はしません。'
                       '測定値と推定値を区別し、個人目標は本人の確認後にだけ適用します。気になる症状や継続する異常値は医療者への相談を促します。'
                       '無理な減量やBMI下限を下回る目標を勧めません。簡潔な日本語で答えてください。'},
                     {'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
                        'question': question.strip()}, ensure_ascii=False)}]}
+        return self._complete(config, prompt)
+
+    def test_connection(self):
+        config = self.settings()
+        return self._complete(config, {'model': config['model'], 'stream': False, 'max_tokens': 16,
+                              'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
+
+    def _complete(self, config, prompt):
+        if not config['base_url']:
+            raise ValueError('NASから到達できるAI接続先URLを保存してください')
+        if config['provider'] == 'qnapassistant' and config['model'] == 'auto':
+            # QnapAssistant owns provider/model selection; do not override it with a literal "auto".
+            prompt.pop('model', None)
         key_path = self._key_path(config['provider'])
         headers = {'Content-Type': 'application/json'}
         if key_path.exists():
@@ -131,7 +144,7 @@ class Coach:
         if not self._limit.acquire(blocking=False):
             raise ValueError('AI相談が実行中です。完了してから再試行してください')
         try:
-            with opener.open(request, timeout=90) as response:
+            with opener.open(request, timeout=300) as response:
                 raw = response.read(128 * 1024 + 1)
             if len(raw) > 128 * 1024:
                 raise ValueError('AIの応答が大きすぎます')
@@ -139,8 +152,28 @@ class Coach:
             if not isinstance(answer, str) or not answer.strip():
                 raise ValueError('AIの回答が空です')
             return {'answer': answer[:10000], 'provider': config['provider'], 'model': config['model']}
-        except (OSError, KeyError, IndexError, json.JSONDecodeError) as error:
-            # Never include upstream error bodies or request headers with secrets.
-            raise ValueError('AI接続または応答の形式を確認してください（接続先・モデル・キー）') from error
+        except HTTPError as error:
+            hints = {400: 'モデル名とリクエスト対応を確認してください', 401: 'APIキーを確認してください',
+                     403: 'APIキーの権限を確認してください', 404: 'URLの /v1 とモデル名を確認してください',
+                     429: '利用上限または混雑です。時間を置いて再試行してください',
+                     502: 'QnapAssistant側のLLM接続・モデル起動状態を確認してください',
+                     503: 'モデルの準備またはサービス起動を待ってください'}
+            raise ValueError(f"AI HTTP {error.code}: {hints.get(error.code, '接続先サービスの稼働状態を確認してください')}") from error
+        except (TimeoutError, socket.timeout) as error:
+            raise ValueError('AI応答が300秒以内に完了しませんでした。モデルの起動状態・処理速度を確認してください') from error
+        except URLError as error:
+            if isinstance(error.reason, (TimeoutError, socket.timeout)):
+                message = 'AI接続がタイムアウトしました。NASからの到達性とモデル起動状態を確認してください'
+            elif isinstance(error.reason, ConnectionRefusedError):
+                message = 'AI接続が拒否されました。QnapAssistantの起動と待受ポートを確認してください'
+            elif isinstance(error.reason, socket.gaierror):
+                message = 'AI接続先の名前を解決できません。ホスト名とDNSを確認してください'
+            else:
+                message = 'AIへの通信に失敗しました。NASからの到達性・TLS設定を確認してください'
+            raise ValueError(message) from error
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError('AIの応答がOpenAI互換の回答形式ではありません。接続先URLを確認してください') from error
+        except OSError as error:
+            raise ValueError('AIへの通信が切断されました。接続先のログとモデル起動状態を確認してください') from error
         finally:
             self._limit.release()

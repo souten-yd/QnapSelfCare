@@ -53,11 +53,34 @@ class WellnessTests(unittest.TestCase):
             self.assertEqual(Coach(empty, restored).settings()['provider'], 'controldeck')
             self.assertFalse(Coach(empty, restored).status()['key_configured'])
 
-    def test_ai_requires_consent_and_sends_aggregate_only(self):
+    def test_ai_test_has_no_health_data_and_errors_are_specific(self):
+        from urllib.error import HTTPError, URLError
+        import socket
+        coach = Coach(self.tmp.name, self.store)
+        coach.save({'provider': 'qnapassistant', 'base_url': '', 'model': 'auto'})
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, size): return b'{"choices":[{"message":{"content":"OK"}}]}'
+        with patch('wellness_ai.build_opener') as factory:
+            factory.return_value.open.return_value = Response()
+            self.assertEqual(coach.test_connection()['answer'], 'OK')
+            args, kwargs = factory.return_value.open.call_args
+            self.assertEqual(kwargs['timeout'], 300)
+            payload = json.loads(args[0].data)
+            self.assertNotIn('model', payload)
+            self.assertNotIn('measurements', str(payload))
+            for error, expected in [(HTTPError('url',401,'secret',{},None),'401'),
+                                    (URLError(ConnectionRefusedError('secret')),'拒否'),
+                                    (socket.timeout('secret'),'300秒')]:
+                factory.return_value.open.side_effect = error
+                with self.assertRaisesRegex(ValueError, expected) as caught:
+                    coach.test_connection()
+                self.assertNotIn('secret', str(caught.exception))
+
+    def test_ai_button_sends_aggregate_without_checkbox(self):
         coach = Coach(self.tmp.name, self.store)
         coach.save({'provider': 'local', 'base_url': 'http://localhost:8765/v1', 'model': 'auto'})
-        with self.assertRaisesRegex(ValueError, '確認'):
-            coach.consult(self.user, 'meal', '献立を考える', False)
         requests = []
         class Response:
             def __enter__(self): return self
@@ -69,7 +92,7 @@ class WellnessTests(unittest.TestCase):
                 self_timeout = timeout
                 return Response()
         with patch('wellness_ai.build_opener', return_value=Opener()):
-            self.assertEqual(coach.consult(self.user, 'meal', '献立を考える', True)['answer'], 'balanced meal')
+            self.assertEqual(coach.consult(self.user, 'meal', '献立を考える')['answer'], 'balanced meal')
         data = json.loads(requests[0].data)
         self.assertEqual(data['messages'][1]['role'], 'user')
         self.assertNotIn(self.user, json.dumps(data))
