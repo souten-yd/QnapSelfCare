@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.15 >/dev/null 2>&1; then
-            echo 'Release v0.3.15 already exists; leaving it unchanged.'
+          if gh release view v0.3.16 >/dev/null 2>&1; then
+            echo 'Release v0.3.16 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.15 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.15' \
-            --notes 'Daily activity, expenditure and intake targets; versioned weekly weight plans with deviations, reviews, history charts and weight-dependent energy estimates. Activity and plan history are included in backups and AI consultation.' \
+          gh release create v0.3.16 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.16' \
+            --notes 'Advertisement-triggered sync waits 60 seconds for measurement completion, then retries once 60 seconds after a failure. Per-device non-blocking timers, cancellation on disable/remove, immediate manual sync and visible countdown.' \
             --target "$GITHUB_SHA"

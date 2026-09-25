@@ -15,7 +15,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  const w=dom.window,d=w.document;
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8'));
+ w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -61,6 +61,12 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.equal(d.querySelector('#coach-form [name=consent]'),null);
  assert(d.getElementById('ai-test'));
  assert.equal(d.getElementById('device-form').elements.sync_mode.value,'listen');
+ const listenerFetch=w.fetch;
+ w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}]}),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
+ await w.__testRefreshJobs();
+ assert.match(d.getElementById('listen-status').textContent,/再試行まで約42秒/);
+ w.fetch=listenerFetch;
+
  d.querySelector('[data-page="wellness"]').click();
  await until(()=>d.getElementById('wellness-summary').textContent.includes('直近の血圧'));
  const wellbeing=d.getElementById('wellness-form');wellbeing.elements.height_cm.value='180';wellbeing.elements.age.value='40';wellbeing.elements.sex.value='male';submit('wellness-form');

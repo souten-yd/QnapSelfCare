@@ -169,38 +169,136 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(store.records()['total'], 1)
             self.assertEqual(store.jobs()[0]['state'], 'done')
 
-    def test_listener_defaults_and_event_cooldown_without_periodic_scan(self):
+    def test_listener_delay_retry_and_cooldown_without_periodic_scan(self):
         with tempfile.TemporaryDirectory() as root:
             store = Store(root)
             user = store.save_user({'name': 'test'})
             device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
-                'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 100})
+                'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 300})
             self.assertEqual(device['sync_mode'], 'listen')
             store.pairing_key(device['address'], '11' * 16)
-            runner = Mock(return_value={'records': []})
+            runner = Mock(side_effect=BluetoothFailure('read timeout'))
             manager = CollectorManager(store, runner=runner)
             response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
-            with patch('collectors.bridge_request', return_value=response) as bridge, patch('collectors.time.monotonic', return_value=100):
+            with patch('collectors.bridge_request', return_value=response) as bridge, patch('collectors.time.monotonic', return_value=100) as clock:
                 manager.schedule()
                 runner.assert_not_called()
                 self.assertEqual(bridge.call_args.kwargs['endpoint'], '/watch')
+                self.assertTrue(manager.queue.empty())
+                self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 60)
+                clock.return_value = 159
+                response['events'][0]['at'] = 1235
+                manager.schedule()
+                self.assertTrue(manager.queue.empty())
+                self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 1)
+                clock.return_value = 160
+                manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
-            with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=300):
+                self.assertEqual(runner.call_count, 1)
+                self.assertEqual(store.jobs()[0]['state'], 'failed')
+                self.assertIn('60秒後', store.jobs()[0]['message'])
+                # Retry needs no new advertisement and bypasses the 300-second normal cooldown.
+                response['events'] = []
+                clock.return_value = 219
                 manager.schedule()
-                self.assertTrue(manager.queue.empty())  # Same event is not consumed twice.
-            response['events'][0]['at'] = 1235
-            with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=303):
+                self.assertTrue(manager.queue.empty())
+                self.assertEqual(manager.listener_status()['waiting'][0]['attempt'], 2)
+                clock.return_value = 220
                 manager.schedule()
-                self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
-            store.save_device(dict(device, auto_sync=False))
-            with patch('collectors.bridge_request', return_value={'supported': True, 'ready': False, 'events': []}) as bridge, patch('collectors.time.monotonic', return_value=306):
+                self.assertEqual(runner.call_count, 2)
+                self.assertFalse(manager.listen_delayed)
+                clock.return_value = 280
+                manager.schedule()
+                self.assertTrue(manager.queue.empty())
+                self.assertEqual(runner.call_count, 2)  # Never a third retry.
+                response['events'] = [{'address': device['address'], 'at': 1236}]
+                clock.return_value = 519
+                manager.schedule()
+                self.assertFalse(manager.listen_delayed)
+                clock.return_value = 521
+                manager.schedule()
+                self.assertFalse(manager.listen_delayed)  # Cached event consumed during cooldown.
+                response['events'][0]['at'] = 1237
+                clock.return_value = 523
+                manager.schedule()
+                self.assertTrue(manager.listen_delayed)
+                clock.return_value = 583
+                runner.side_effect = None
+                runner.return_value = {'records': []}
+                manager.schedule()
+                manager.process(manager.queue.get_nowait())
+                self.assertFalse(manager.listen_delayed)  # Success, including 0 records, ends cycle.
+                self.assertEqual(runner.call_count, 3)
+                store.save_device(dict(device, auto_sync=False))
+                clock.return_value = 590
                 manager.schedule()
                 self.assertEqual(bridge.call_args.args[1]['addresses'], [])
                 self.assertFalse(manager.watch_configured)
             with self.assertRaises(ValueError):
                 store.save_device(dict(device, transport='direct', sync_mode='listen'))
+
+    def test_listener_reservations_cancel_and_manual_sync_is_immediate(self):
+        for cancel in ('off', 'delete', 'mode', 'binding', 'manual', 'queued_off'):
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as root:
+                store = Store(root)
+                user = store.save_user({'name': 'test'})
+                device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                    'bindings': {'1': user['id']}, 'auto_sync': True})
+                store.pairing_key(device['address'], '11' * 16)
+                runner = Mock(return_value={'records': []})
+                manager = CollectorManager(store, runner=runner)
+                response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
+                with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=100) as clock:
+                    manager.schedule()
+                    if cancel == 'queued_off':
+                        clock.return_value = 160
+                        manager.schedule()
+                    if cancel in ('off', 'queued_off'):
+                        store.save_device(dict(device, auto_sync=False))
+                    elif cancel == 'delete':
+                        store.delete_device(device['id'])
+                    elif cancel == 'mode':
+                        store.save_device(dict(device, sync_mode='interval'))
+                    elif cancel == 'binding':
+                        store.save_device(dict(device, bindings={}))
+                    else:
+                        manager.submit('sync', device['id'])
+                        self.assertFalse(manager.listen_delayed)
+                        manager.process(manager.queue.get_nowait())
+                        self.assertEqual(runner.call_count, 1)
+                    if cancel == 'queued_off':
+                        manager.process(manager.queue.get_nowait())
+                        self.assertEqual(store.jobs()[0]['state'], 'skipped')
+                    clock.return_value = 200
+                    manager.dispatch_listen()
+                    self.assertFalse(manager.listen_delayed)
+                    if cancel != 'manual':
+                        runner.assert_not_called()
+
+    def test_listener_missing_device_retry_can_succeed(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            user = store.save_user({'name': 'test'})
+            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                'bindings': {'1': user['id']}, 'auto_sync': True})
+            store.pairing_key(device['address'], '11' * 16)
+            runner = Mock(side_effect=[BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'), {'records': []}])
+            manager = CollectorManager(store, runner=runner)
+            response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
+            with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=100) as clock:
+                manager.schedule()
+                clock.return_value = 160
+                manager.schedule()
+                manager.process(manager.queue.get_nowait())
+                self.assertEqual(store.jobs()[0]['state'], 'skipped')
+                self.assertTrue(manager.listen_delayed)
+                clock.return_value = 220
+                manager.schedule()
+                manager.process(manager.queue.get_nowait())
+                self.assertTrue(any(j['state'] == 'done' and '再試行' in j['message'] for j in store.jobs()))
+                self.assertFalse(manager.listen_delayed)
 
     def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):
         with tempfile.TemporaryDirectory() as root:
