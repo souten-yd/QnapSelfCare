@@ -14,6 +14,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/shared" "$output"
 cp "$root/qpkg/qpkg.cfg" "$work/qpkg.cfg"
+cp "$root/qpkg/package_routines" "$work/package_routines"
 cp "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$work/shared/"
 chmod 755 "$work/shared/selfcare-update"
 qbuild --root "$work" --build-arch "$arch" --build-dir "$work/build"
