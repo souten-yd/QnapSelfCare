@@ -37,11 +37,18 @@ def response(data, opcode, address, length):
         raise ValueError("Bluetooth応答が要求したコマンドと一致しません")
     if data[-2] != 0:
         raise ValueError(f"機器が通信エラーを返しました（{data[-2]}）")
-    # Session start/end acknowledge with an eight-byte control frame. The
-    # start command's 0x10 field is not a promise of 16 response payload bytes.
-    if opcode in (0, 15):
+    # Start may acknowledge with only the eight-byte header, or include the
+    # advertised 16-byte device-info block (24 bytes total, observed on HEM).
+    # Validate both shapes; this is session metadata, not measurement data.
+    if opcode == 0:
+        if len(data) == 8:
+            return b''
+        if data[5] == 16 and len(data) == 24:
+            return data[6:-2]
+        raise ValueError("通信開始応答の長さが不正です")
+    if opcode == 15:
         if len(data) != 8:
-            raise ValueError("通信開始・終了応答の長さが不正です")
+            raise ValueError("通信終了応答の長さが不正です")
         return b''
     if data[5] != length or len(data) != length + 8:
         raise ValueError("Bluetooth応答のデータが不足しています")
