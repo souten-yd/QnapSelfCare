@@ -1,4 +1,4 @@
-QnapSelfCare 0.3.3
+QnapSelfCare 0.3.4
 
 Local health records, user/device settings, CSV import/export, JSON backup/restore.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.

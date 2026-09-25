@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -174,6 +175,35 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.migration.rollback(self.job, h.read_json(self.job / 'original.json'))
         self.assertEqual(self.migration.calls, [])
+
+    @unittest.skipUnless(shutil.which('docker'), 'Compose CLI required for effective-config check')
+    def test_custom_compose_preserves_site_settings_and_limits_changes(self):
+        custom = self.before.decode().replace('MATTERBRIDGE_MDNS_INTERFACE: ${MATTERBRIDGE_MDNS_INTERFACE:-}',
+            'MATTERBRIDGE_MDNS_INTERFACE: en0').replace('      DATA_DIR: /data\n',
+            '      DATA_DIR: /data\n      SITE_CUSTOM_SETTING: keep-me\n', 1)
+        (self.root / 'compose.yaml').write_text(custom)
+        migration = h.Migration.__new__(h.Migration)
+        migration.root = self.root
+        migration.compose_file = self.root / 'compose.yaml'
+        migration.docker = shutil.which('docker')
+        migration.env = dict(os.environ, QNAP_HOMEHUB_PROJECT_DIR=str(self.root))
+        before = migration.effective(migration.compose_file)
+        output = self.job / 'compose-shared.yaml'
+        output.write_bytes(migration.target_compose(False, False))
+        after = migration.effective(output)
+        self.assertEqual(after['services']['matterbridge'], before['services']['matterbridge'])
+        self.assertEqual(after['services']['updater'], before['services']['updater'])
+        self.assertEqual(after['services']['homehub']['environment']['SITE_CUSTOM_SETTING'], 'keep-me')
+        self.assertEqual(after['services']['homehub']['volumes'][0], before['services']['homehub']['volumes'][0])
+        self.assertFalse(after['services']['homehub'].get('privileged', False))
+        self.assertEqual(after['services']['homehub']['environment']['HOMEHUB_SHARED_RADIO'], '1')
+        self.assertEqual(after['services']['radio']['container_name'], 'qnaphomehub-radio')
+        # Reject incompatible Bluetooth ownership without touching the Compose file.
+        before['services']['homehub']['devices'] = ['/dev/bus/usb:/dev/bus/usb']
+        with patch.object(migration, 'effective', side_effect=[before, migration.effective(h.ROOT / 'homehub/compose-shared.yaml')]):
+            with self.assertRaisesRegex(ValueError, 'Bluetooth機器設定'):
+                migration.target_compose(False, False)
+        self.assertEqual((self.root / 'compose.yaml').read_text(), custom)
 
 
 if __name__ == '__main__': unittest.main()

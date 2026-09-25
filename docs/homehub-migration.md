@@ -1,8 +1,8 @@
-# 画面から共通Bluetooth構成へ移行（0.3.3）
+# 画面から共通Bluetooth構成へ移行（0.3.4）
 
-SelfCareを0.3.3へ更新後、「設定・バックアップ → 共通Bluetoothのセットアップ → 共通Bluetooth構成へ更新」を押します。NAS上でHomeHubの構成確認・イメージ取得・設定退避・適用・起動確認を実行します。SSHでComposeを手作業で編集する必要はありません。ページを閉じても処理は続きます。
+SelfCareを0.3.4へ更新後、「設定・バックアップ → 共通Bluetoothのセットアップ → 共通Bluetooth構成へ更新」を押します。NAS上でHomeHubの構成確認・イメージ取得・設定退避・適用・起動確認を実行します。SSHでComposeを手作業で編集する必要はありません。ページを閉じても処理は続きます。
 
-対象はx86_64 NASの `/share/Container/QnapHomeHub/compose.yaml` に置かれた標準の旧構成または0.3.0の共有構成です。HomeHubとupdaterが起動している必要があります。独自のCompose、追加override、別プロジェクト・別データ保存先、別イメージ、0.3.0より新しいHomeHubは上書きしません。専用 `qnapselfcare-bluetooth` が動いている場合も中止します。Composeが標準でも、既存の利用者設定・機器設定・secrets・`.env`は保持します。
+対象はx86_64 NASの `/share/Container/QnapHomeHub/compose.yaml` に置かれた標準の旧構成または0.3.0の共有構成です。HomeHubとupdaterが起動している必要があります。Docker Composeで解釈した独自の設定は可能な範囲で保持し、必要なBluetooth構成だけを変更します。追加override、別プロジェクト・別データ保存先、別イメージ、Bluetooth機器を直接使う独自設定、0.3.0より新しいHomeHubは上書きしません。専用 `qnapselfcare-bluetooth` が動いている場合も中止します。元のComposeは必ず退避し、設定中の環境変数参照は解釈済みの値になります。既存の利用者設定・機器設定・secrets・`.env`は保持します。
 
 HomeHub 0.3.0のコミット `aed424cf572295ac2636d1cebae6b69c98606498` に対応する公式GHCRのserver/updaterイメージを使用します。テンプレートの出典も同コミットで、旧テンプレートは `6d0d942` です。MITライセンスを `homehub/LICENSE` に同梱しています。
 
@@ -22,4 +22,4 @@ HomeHubのWebポート8787、SelfCareの17863を維持します。Matterbridge�
 
 この処理は任意URL・パス・シェルコマンドをAPIで受け付けません。既存のHomeHub初回移行を、限定した構成で実行する機能です。実NASでの移行・機器通信は画面の結果と実際の同期で確認してください。
 
-0.3.3では、SelfCare更新中にバックアップが競合した場合はエラーではなく「更新・移行処理の完了待ち」として約1分後に再試行します。バックアップは引き続き週1回・14世代が初期設定です。
+0.3.4では、SelfCare更新中にバックアップが競合した場合はエラーではなく「更新・移行処理の完了待ち」として約1分後に再試行します。バックアップは引き続き週1回・14世代が初期設定です。

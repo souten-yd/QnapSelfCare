@@ -1,5 +1,6 @@
 """Explicit migration of the standard QnapHomeHub Compose deployment."""
 import json
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -96,6 +97,65 @@ class Migration:
         if status.get('busy') is not False or status.get('phase') in ('applying', 'rollback'):
             raise DataUnavailable('HomeHubの更新処理中です。HomeHubの更新完了後に実行してください')
 
+    def effective(self, filename):
+        return json.loads(self.compose(['config', '--format', 'json'], filename))
+
+    def target_compose(self, legacy, shared):
+        """Keep site-specific Compose settings while moving Bluetooth ownership to radio."""
+        if legacy or shared:
+            return (ROOT / 'homehub/compose-shared.yaml').read_bytes()
+        current = self.effective(self.compose_file)
+        reference = self.effective(ROOT / 'homehub/compose-shared.yaml')
+        services = current.get('services', {})
+        homehub = services.get('homehub', {})
+        updater = services.get('updater', {})
+        expected = reference['services']
+        environment = homehub.get('environment', {})
+        volumes = homehub.get('volumes', [])
+        if (not isinstance(environment, dict) or not isinstance(volumes, list)
+                or homehub.get('image') != IMAGE + ':server'
+                or updater.get('image') != IMAGE + ':updater'
+                or homehub.get('network_mode') != 'host'
+                or homehub.get('container_name') != 'qnaphomehub'
+                or updater.get('container_name') != 'qnaphomehub-updater'
+                or environment.get('PORT') != '8787'
+                or environment.get('DATA_DIR') != '/data'):
+            raise ValueError('HomeHubの接続・保存設定が移行対象と異なります。自動変更を中止しました')
+        radio_volume = next(volume for volume in expected['homehub']['volumes'] if volume['target'] == '/radio')
+        if any(volume.get('target') == '/radio' and volume != radio_volume
+               for volume in volumes):
+            raise ValueError('HomeHubのradio保存先が標準と異なります')
+        if homehub.get('devices') or homehub.get('cap_add') or any(
+                volume.get('target', '').startswith(('/dev', '/var/run/dbus', '/var/lib/bluetooth'))
+                for volume in volumes):
+            raise ValueError('HomeHubに独自のBluetooth機器設定があります。自動変更を中止しました')
+        existing_radio = services.get('radio')
+        if existing_radio and existing_radio != expected['radio']:
+            raise ValueError('既存radioの設定が標準と異なります。自動変更を中止しました')
+        for name in ('switchbot_token', 'switchbot_secret'):
+            config = reference['secrets'][name]
+            if name in current.get('secrets', {}) and current['secrets'][name] != config:
+                raise ValueError('radioが使うsecretsの保存先が標準と異なります')
+        for name, service in services.items():
+            if name not in ('homehub', 'radio') and (service.get('privileged') or
+                    any('/dev/bus/usb' in str(value) for value in service.get('devices', []))):
+                raise ValueError('別サービスがBluetooth機器を使用する可能性があります: ' + name)
+        already_shared = environment.get('HOMEHUB_SHARED_RADIO') == '1'
+        if already_shared and homehub.get('privileged'):
+            raise ValueError('HomeHubが共通radioと特権モードを同時使用しています')
+        if not already_shared and homehub.get('privileged') is not True:
+            raise ValueError('旧HomeHubのBluetooth実行方式が標準と異なります')
+        updated = copy.deepcopy(current)
+        target = updated['services']['homehub']
+        target['privileged'] = False
+        target['environment']['HOMEHUB_SHARED_RADIO'] = '1'
+        if not any(volume.get('target') == '/radio' for volume in target['volumes']):
+            target['volumes'].append(copy.deepcopy(radio_volume))
+        updated['services']['radio'] = copy.deepcopy(expected['radio'])
+        updated.setdefault('secrets', {}).update({name: copy.deepcopy(reference['secrets'][name])
+            for name in ('switchbot_token', 'switchbot_secret')})
+        return (json.dumps(updated, ensure_ascii=False, indent=2) + '\n').encode()
+
     def preflight(self):
         if os.geteuid() != 0 or platform.machine() not in ('x86_64', 'AMD64'):
             raise ValueError('この移行は管理者権限で動くx86_64 NAS用です')
@@ -104,8 +164,6 @@ class Migration:
         content = canonical(self.compose_file.read_text())
         legacy = content == canonical((ROOT / 'homehub/compose-legacy.yaml').read_text())
         shared = content == canonical((ROOT / 'homehub/compose-shared.yaml').read_text())
-        if not (legacy or shared):
-            raise ValueError('標準と異なるComposeです。既存設定を守るため自動上書きを中止しました')
         for name in ('compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yml', 'docker-compose.override.yaml'):
             if (self.root / name).exists():
                 raise ValueError('Composeの追加設定があります。個別確認が必要です')
@@ -116,9 +174,12 @@ class Migration:
             if dedicated['State']['Running']:
                 raise ValueError('専用Bluetoothコンテナが稼働しています。qnapselfcare-bluetoothを停止してから移行してください')
         radio_exists = 'qnaphomehub-radio' in names
-        if legacy and radio_exists:
+        effective_shared = shared
+        if not (legacy or shared):
+            effective_shared = self.effective(self.compose_file)['services']['homehub'].get('environment', {}).get('HOMEHUB_SHARED_RADIO') == '1'
+        if not effective_shared and radio_exists:
             raise ValueError('旧構成と既存radioが混在しています。個別確認が必要です')
-        services = ['homehub', 'updater'] + (['radio'] if shared and radio_exists else [])
+        services = ['homehub', 'updater'] + (['radio'] if effective_shared and radio_exists else [])
         radio_running = False
         images = {}
         for service in services:
@@ -151,7 +212,9 @@ class Migration:
         self.updater_idle()
         if (self.root / '.env').is_symlink():
             raise ValueError('環境設定がシンボリックリンクです。個別確認が必要です')
-        return {'legacy': legacy, 'images': images, 'radio_exists': radio_exists, 'radio_running': radio_running}
+        return {'legacy': not effective_shared, 'images': images, 'radio_exists': radio_exists,
+                'radio_running': radio_running,
+                'compose_digest': hashlib.sha256(self.compose_file.read_bytes()).hexdigest()}
 
     def wait_healthy(self, shared, timeout=90):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -201,7 +264,10 @@ class Migration:
         phase('checking', 'HomeHubの構成・保存先・更新状態を確認しています')
         metadata = self.preflight()
         shutil.copyfile(self.compose_file, job / 'compose-before.yaml')
-        shutil.copyfile(ROOT / 'homehub/compose-shared.yaml', job / 'compose-shared.yaml')
+        content = canonical(self.compose_file.read_text())
+        legacy = content == canonical((ROOT / 'homehub/compose-legacy.yaml').read_text())
+        shared = content == canonical((ROOT / 'homehub/compose-shared.yaml').read_text())
+        (job / 'compose-shared.yaml').write_bytes(self.target_compose(legacy, shared))
         self.compose(['config', '--quiet'], job / 'compose-shared.yaml')
         if shutil.disk_usage(self.root).free < 512 * 1024 ** 2:
             raise ValueError('移行用の空き容量が不足しています（512MiB以上必要）')

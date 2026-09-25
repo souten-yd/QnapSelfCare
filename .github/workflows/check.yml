@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.3 >/dev/null 2>&1; then
-            echo 'Release v0.3.3 already exists; leaving it unchanged.'
+          if gh release view v0.3.4 >/dev/null 2>&1; then
+            echo 'Release v0.3.4 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.3 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.3' \
-            --notes 'Adds an explicit Web action to migrate standard QnapHomeHub deployments to shared Bluetooth radio: pinned official images, project/data checks, private settings backup, stop-before-start, health checks, rollback and interrupted recovery. Custom Compose configurations are not overwritten. Weekly backups now wait and retry during updates instead of reporting a lock conflict as an error. NAS migration still requires hardware validation.' \
+          gh release create v0.3.4 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.4' \
+            --notes 'Allows the HomeHub shared-Bluetooth migration to preserve supported customized Compose settings. Validates Bluetooth ownership, retains the original Compose for rollback, and detects configuration changes during image retrieval. NAS migration still requires hardware validation.' \
             --target "$GITHUB_SHA"
