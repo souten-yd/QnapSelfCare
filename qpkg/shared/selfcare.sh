@@ -9,6 +9,8 @@ else
 fi
 [ -n "$root" ] || { echo 'QPKG installation path missing' >&2; exit 1; }
 pidfile="$root/selfcare.pid"
+data_dir=${SELFCARE_DATA_DIR:-/share/Container/QnapSelfCare}
+logfile="$data_dir/logs/selfcare.log"
 
 running() {
     [ -f "$pidfile" ] || return 1
@@ -27,15 +29,17 @@ case "${1:-}" in
         fi
         running && exit 0
         umask 077
-        python=$(/bin/sh "$root/python3-path" 2>> "$root/selfcare.log") || {
-            echo 'Python 3.8+ not found; check selfcare.log' >&2
+        [ -d "$(dirname "$data_dir")" ] || { echo 'Container share is missing' >&2; exit 1; }
+        mkdir -p "$data_dir/logs"
+        python=$(/bin/sh "$root/python3-path" 2>> "$logfile") || {
+            echo "Python 3.8+ not found; check $logfile" >&2
             exit 1
         }
         rm -f "$root/admin-token"
-        nohup "$python" "$root/webapp.py" --lan --port 17863 > "$root/selfcare.log" 2>&1 &
+        "$python" "$root/webapp.py" --lan --port 17863 < /dev/null > "$logfile" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
-        running || { rm -f "$pidfile"; echo 'Web UI failed to start; check selfcare.log' >&2; exit 1; }
+        running || { rm -f "$pidfile"; echo "Web UI failed to start; check $logfile" >&2; exit 1; }
         ;;
     stop)
         if running; then kill "$(cat "$pidfile")"; fi

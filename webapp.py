@@ -16,7 +16,7 @@ import updater
 
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 PRIVATE_LANS = tuple(ipaddress.ip_network(cidr) for cidr in (

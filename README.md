@@ -1,6 +1,6 @@
 # QnapSelfCare
 
-QNAP上でOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理するためのQPKG設計です。0.2.5は**認証不要のWeb管理画面と更新確認機能のプレビュー**です。測定データの自動収集とNAS実機動作は未検証です。
+QNAP上でOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理するためのQPKG設計です。0.2.6は**認証不要のWeb管理画面と更新確認機能のプレビュー**です。測定データの自動収集とNAS実機動作は未検証です。
 
 ## 構成と段階
 
@@ -9,7 +9,7 @@ QNAP上でOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の�
 | HEM-6232T | QNAPのHome Assistant Container + ESPHome Bluetooth Proxy + `hass-omron` を利用し、測定イベントをローカル保存層へ取り込む | 設計のみ。実機ペアリング・履歴同期を検証する |
 | HBF-228T | 端末内の履歴をBLE GATTで読み、利用者スロットと測定日時を保持して保存する専用アダプター | 設計のみ。ESPHome Bluetooth Proxy経由の任意GATT操作は未確認。USB BLEまたは専用ESP32ファームウェアを実機で選定する |
 | データ | SQLite（測定時刻・受信時刻・機器ID・利用者スロット・単位・元データの識別子）をQPKG外の永続領域に置き、重複を防ぐ | 未実装 |
-| Web管理画面 | QPKGから起動し、状態・機器・更新情報を表示 | 0.2.5はLANおよびTailscale経由でログイン不要、読み取り専用。測定データは表示・収集しない |
+| Web管理画面 | QPKGから起動し、状態・機器・更新情報を表示 | 0.2.6はLANおよびTailscale経由でログイン不要、読み取り専用。測定データは表示・収集しない |
 | 更新 | GitHubの最新安定版Releaseを照会し、機種別QPKGをSHA-256検証後に取得。App Centerで手動適用 | CLIによる照会・検証付き取得、Web画面による更新通知とQPKGのリンクを実装 |
 
 この設計ではQPKGは設定・保存・更新の入口を担当します。Home AssistantとBluetooth Proxyは別コンポーネントとして利用し、既存Container Stationの設定や他のコンテナを自動で変更しません。いずれの測定器もBluetoothペアリング、通信可能な時間帯、履歴の保持数に依存するため「測るだけで常に即時保存」を保証する段階ではありません。OMRON connect側の履歴は移行前にエクスポート・バックアップしてください。ペアリング先を変えると従来の同期が使えなくなる可能性があります。
@@ -31,7 +31,7 @@ QPKGはQDKでビルドし、NASのCPUアーキテクチャごとにRelease asset
 
 ## Web管理画面
 
-0.2.5 QPKGをApp Centerでインストールして有効化すると、管理画面が `http://<NASのLAN IPv4>:17863/` で起動します。App Centerの「開く」からもアクセスできます。ログインやSSHポート転送は不要です。サーバーはNASのLANインターフェースに割り当てられたプライベートIPv4、localhost、割り当てられていればtailscale0のIPv4で待ち受けます。既定経路のIPがLANのIPと異なっていても、実際のインターフェースから探します。接続元のサブネットによる制限は行いません。LANインターフェースのIPv4を特定できないときはサービスログに原因を記録して起動を止めます。
+0.2.6 QPKGをApp Centerでインストールして有効化すると、管理画面が `http://<NASのLAN IPv4>:17863/` で起動します。App Centerの「開く」からもアクセスできます。ログインやSSHポート転送は不要です。サーバーはNASのLANインターフェースに割り当てられたプライベートIPv4、localhost、割り当てられていればtailscale0のIPv4で待ち受けます。既定経路のIPがLANのIPと異なっていても、実際のインターフェースから探します。接続元のサブネットによる制限は行いません。LANインターフェースのIPv4を特定できないときはサービスログに原因を記録して起動を止めます。
 
 ### Tailscale経由で開く
 
@@ -39,21 +39,21 @@ QPKGはQDKでビルドし、NASのCPUアーキテクチャごとにRelease asset
 - 別の機器がNASのLANに向けてTailscaleサブネットルートを配信している: iPhoneでTailscaleを有効にし、ルートが利用できれば `http://192.168.68.57:17863/` を開きます。LANのアドレスが変わった場合は実際のNASのIPv4に置き換えてください。
 - NAS上でTailscale Serveを使う場合: `tailscale serve status` で既存設定を確認してから `tailscale serve --bg 17863` を実行し、コマンドが表示するtailnet内のHTTPS URLを開きます。既存の443番Serve設定を使っている場合はその設定に合わせてください。Serveを使わなくても上記のHTTP接続で利用できます。
 
-接続失敗時はNASにSSH接続し、`/sbin/getcfg QnapSelfCare Install_Path -f /etc/config/qpkg.conf` でインストール先を確認して `selfcare.log` を参照してください。`/sbin/getcfg Python3 Install_Path -d '' -f /etc/config/qpkg.conf`、`ls -l /opt/bin/python3 /opt/python3/bin/python3 2>/dev/null`、`command -v python3` でPython 3の候補を確認し、`netstat -lnt | grep 17863` で待ち受けを確認できます。ブラウザの `ERR_CONNECTION_FAILED` はサービスの未起動や通信経路の問題でも起こります。NAS実機とiPhoneからの到達は未検証です。
+接続失敗時はNASにSSH接続し、`/sbin/getcfg QnapSelfCare Install_Path -f /etc/config/qpkg.conf` でインストール先を確認して `/share/Container/QnapSelfCare/logs/selfcare.log` を参照してください。起動には既存の `/share/Container` 共有フォルダが必要です。QPKG本体とPIDファイルはインストール先、永続ログは `/share/Container/QnapSelfCare` に置きます。起動スクリプトは `nohup` を使いません。`/sbin/getcfg Python3 Install_Path -d '' -f /etc/config/qpkg.conf`、`ls -l /opt/bin/python3.11 /opt/bin/python3 2>/dev/null`、`command -v python3` でPython 3の候補を確認し、`netstat -lnt | grep 17863` で待ち受けを確認できます。ブラウザの `ERR_CONNECTION_FAILED` はサービスの未起動や通信経路の問題でも起こります。NAS実機とiPhoneからの到達は未検証です。
 
-Python 3.8以降がNASに必要です。起動スクリプトと更新コマンドは共通の `python3-path` を使い、App CenterのPython3 QPKGの登録先、`/opt/bin/python3.11`、`/opt/bin/python3`、`/opt/python3/bin/python3`、`/usr/local/bin/python3`、PATHの順に実行できるPythonを探します。特殊な配置の場合は `SELFCARE_PYTHON=/実際の/パス/python3` を起動時の環境変数に指定できます。見つからないときは `selfcare.log` にエラーを記録します。管理画面は認証なしのHTTPです。NAS側のネットワーク設定で到達できる相手は誰でも閲覧できます。ポート17863をインターネットへ転送しないでください。現段階では血圧や体重の個人データを保存・表示しません。アイコンの原稿は `web/icon.svg`、QDK用PNGは `qpkg/icons/` にあります。
+Python 3.8以降がNASに必要です。起動スクリプトと更新コマンドは共通の `python3-path` を使い、App CenterのPython3 QPKGの登録先、`/opt/bin/python3.11`、`/opt/bin/python3`、`/opt/python3/bin/python3`、`/usr/local/bin/python3`、PATHの順に実行できるPythonを探します。特殊な配置の場合は `SELFCARE_PYTHON=/実際の/パス/python3` を起動時の環境変数に指定できます。見つからないときは上記ログにエラーを記録します。管理画面は認証なしのHTTPです。NAS側のネットワーク設定で到達できる相手は誰でも閲覧できます。ポート17863をインターネットへ転送しないでください。現段階では血圧や体重の個人データを保存・表示しません。アイコンの原稿は `web/icon.svg`、QDK用PNGは `qpkg/icons/` にあります。
 
 Bluetoothアダプター名はNASのsysfsから読み取り専用で表示します。QnapHomeHubが使用中のドングルとの共存条件とOmronへの接続手順は[Bluetooth共存設計](docs/bluetooth-homehub.md)を参照してください。アダプターを検出してもOmron機器と接続できたことは意味しません。
 
 ## 更新の使い方（開発者向け）
 
-`./selfcare-update check --current-version 0.2.5 --arch x86_64` で公開中の最新安定版を確認します。新しいQPKGがある場合、`./selfcare-update download --current-version 0.2.5 --arch x86_64 --dest /path/to/private/staging` で取得します。`--arch` はNASに対応するRelease asset名の値を指定してください。管理画面の更新確認ボタンからも新しいQPKGへのリンクを表示します。QPKGは `x86_64` と `arm_64` 向けにQDKでビルドします。NASのCPU種別とQTSのバージョンを確認して該当するファイルをApp Centerから手動インストールしてください。実機インストールの検証は未実施です。
+`./selfcare-update check --current-version 0.2.6 --arch x86_64` で公開中の最新安定版を確認します。新しいQPKGがある場合、`./selfcare-update download --current-version 0.2.6 --arch x86_64 --dest /path/to/private/staging` で取得します。`--arch` はNASに対応するRelease asset名の値を指定してください。管理画面の更新確認ボタンからも新しいQPKGへのリンクを表示します。QPKGは `x86_64` と `arm_64` 向けにQDKでビルドします。NASのCPU種別とQTSのバージョンを確認して該当するファイルをApp Centerから手動インストールしてください。実機インストールの検証は未実施です。
 
 Releaseのタグは `vX.Y.Z`、assetは `QnapSelfCare_X.Y.Z_<arch>.qpkg` とします。GitHubのRelease APIが返すassetの `digest`（`sha256:...`）がない場合は取得しません。取得後もSHA-256を照合し、失敗時はファイルを残しません。ドラフト・プレリリース・同一/旧バージョンは対象外です。QPKGの**適用はQNAP App Centerの手動インストール**で行います。更新確認や取得によってサービス・DB・コンテナは変更されません。
 
 ## 実装マイルストーン
 
-1. QPKG設計、QDKビルド、Release照会・検証付き取得、LANとTailscale経由で開ける管理画面とアイコン（0.2.5）。
+1. QPKG設計、QDKビルド、Release照会・検証付き取得、LANとTailscale経由で開ける管理画面とアイコン（0.2.6）。
 2. QNAP実機でのインストール・更新・アンインストール、サービス起動とアクセスを検証。
 3. HEM-6232TをHome Assistant経由で取り込み、日時・利用者・重複・再接続を検証。
 4. HBF-228TのBLE経路と読める項目を実機で確定し、履歴・複数ユーザーを検証。
