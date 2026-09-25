@@ -42,7 +42,15 @@ case "${1:-}" in
         running || { rm -f "$pidfile"; echo "Web UI failed to start; check $logfile" >&2; exit 1; }
         ;;
     stop)
-        if running; then kill "$(cat "$pidfile")"; fi
+        if running; then
+            kill "$(cat "$pidfile")"
+            count=0
+            while running; do
+                count=$((count + 1))
+                [ "$count" -lt 15 ] || { echo 'Web service did not stop; refusing overlapping restart' >&2; exit 1; }
+                sleep 1
+            done
+        fi
         rm -f "$pidfile"
         ;;
     restart)

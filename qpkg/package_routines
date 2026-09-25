@@ -1,1 +1,1 @@
-# QDK requires this file. This preview has no install/remove hooks.
+# QDK uses its standard install/upgrade hooks for this package.

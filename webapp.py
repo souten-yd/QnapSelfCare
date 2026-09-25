@@ -11,11 +11,12 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 import updater
+from self_update import UpdateManager, UpdateConflict
 from collectors import CollectorManager
 from storage import CSV_FIELDS, Store, integer
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -77,6 +78,7 @@ class Handler(BaseHTTPRequestHandler):
         static = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                  "/update.js": ("update.js", "text/javascript; charset=utf-8"),
                   "/icon.svg": ("icon.svg", "image/svg+xml")}
         if path in static:
             name, mime = static[path]
@@ -113,6 +115,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"available": asset is not None,
                              "version": asset["version"] if asset else None,
                              "url": asset["url"] if asset else None})
+        elif path == "/api/update/status":
+            self._json(200, self.server.updates.status())
+        elif path == "/api/update/log":
+            self._json(200, {"log": self.server.updates.log_tail()})
         else:
             self._json(404, {"error": "見つかりません"})
 
@@ -142,7 +148,12 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             path = urlsplit(self.path).path
             if method == "POST":
-                if path == "/api/users":
+                if path == "/api/update/apply":
+                    if set(body) != {"version"}:
+                        raise ValueError("versionのみ指定してください。任意のURL・コマンドは実行できません")
+                    self._json(202, self.server.updates.apply(body["version"]))
+                    return
+                elif path == "/api/users":
                     result = self.store.save_user(body)
                 elif path == "/api/devices":
                     result = self.store.save_device(body)
@@ -170,6 +181,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, result)
         except PermissionError as error:
             self._json(403, {"error": str(error)})
+        except UpdateConflict as error:
+            self._json(409, {"error": str(error)})
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             self._json(400, {"error": str(error)})
         except Exception:
@@ -187,6 +200,7 @@ def main():
     collector = CollectorManager(store)
     with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
         server.store, server.collector = store, collector
+        server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
         print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)

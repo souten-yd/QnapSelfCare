@@ -1,4 +1,4 @@
-"""Check and stage verified QnapSelfCare QPKG releases; never install them."""
+"""Select and verify QnapSelfCare releases. Web installation uses self_update.py."""
 
 import argparse
 import hashlib
@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 import urllib.request
 
 
@@ -75,7 +76,10 @@ def stage(asset, destination):
             temp = Path(out.name)
             digest = hashlib.sha256()
             count = 0
+            deadline = time.monotonic() + 300
             while chunk := response.read(1024 * 1024):
+                if time.monotonic() > deadline:
+                    raise ValueError("download exceeded the five-minute time limit")
                 count += len(chunk)
                 if count > asset["size"] or count > MAX_BYTES:
                     raise ValueError("download exceeds release asset size")

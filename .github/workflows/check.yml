@@ -38,13 +38,13 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile storage.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py
+      - run: python -m py_compile storage.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: npm test
-      - run: node --check web/app.js
+      - run: node --check web/app.js && node --check web/update.js
       - run: python -m py_compile webapp.py
       - run: sh -n qpkg/shared/selfcare.sh scripts/install-ble.sh bluetooth/entrypoint.sh
       - run: sh -n qpkg/shared/selfcare-update qpkg/shared/python3-path
@@ -56,17 +56,17 @@ jobs:
           sudo apt-get install -y /tmp/qdk.deb rsync
       - run: bash scripts/build-qpkg.sh x86_64 "$PWD/dist"
       - run: bash scripts/build-qpkg.sh arm_64 "$PWD/dist"
-      - name: Publish preview release
+      - name: Publish release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.0 >/dev/null 2>&1; then
-            echo 'Release v0.3.0 already exists; leaving it unchanged.'
+          if gh release view v0.3.1 >/dev/null 2>&1; then
+            echo 'Release v0.3.1 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.0 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.0 preview' \
-            --notes 'Local health records: users/devices, manual entry/edit, SQLite persistence, history charts, CSV import/export and JSON backup/restore. USB Omron HEM-6232T / HBF-228T scan/pair/history sync with bounded jobs and automatic discovery. Shared-radio support for QnapHomeHub 0.3.0; separate Web ports 17863 and 8787. No ESP32. Bluetooth transport and QNAP hardware behavior still require real-device validation.' \
+          gh release create v0.3.1 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.1' \
+            --notes 'Adds the Web Update button: NAS-side verified QPKG download, private database/config backup, installation and restart/version checks. Detached worker survives Web restarts without nohup, records progress/logs, rejects duplicate updates and refuses arbitrary URLs/commands. Existing health records, Bluetooth setup and ports are retained. From 0.3.0, install this version once via App Center; future updates use the button. QNAP hardware self-update still requires real-device validation.' \
             --target "$GITHUB_SHA"

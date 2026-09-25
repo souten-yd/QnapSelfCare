@@ -1,1 +1,1 @@
-{"name":"qnapselfcare-ui-tests","private":true,"scripts":{"test":"node tests/ui.cjs"},"devDependencies":{"jsdom":"26.1.0"}}
+{"name":"qnapselfcare-ui-tests","private":true,"scripts":{"test":"node tests/ui.cjs && node tests/update-ui.cjs"},"devDependencies":{"jsdom":"26.1.0"}}
