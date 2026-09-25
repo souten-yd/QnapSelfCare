@@ -1,6 +1,6 @@
 # QnapSelfCare
 
-QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理します。0.3.2は診断・定期バックアップ・破損時の保護と復旧に対応します。0.3.1からのWebボタンによる自己更新も利用できます。0.3.0からの利用者・機器管理、記録の保存・編集、グラフ、CSV、バックアップとUSB Bluetooth収集も利用できます。0.3.1のWeb接続・バージョン表示は利用者のNASで確認済みです。**BLEペアリング・履歴同期は実機での検証が必要です。** ESP32は使用しません。
+QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理します。0.3.3は画面からHomeHubを共通Bluetooth構成へ移行できます。0.3.2の診断・定期バックアップ・破損時の保護と復旧も利用できます。0.3.1からのWebボタンによる自己更新も利用できます。0.3.0からの利用者・機器管理、記録の保存・編集、グラフ、CSV、バックアップとUSB Bluetooth収集も利用できます。0.3.1のWeb接続・バージョン表示は利用者のNASで確認済みです。**BLEペアリング・履歴同期は実機での検証が必要です。** ESP32は使用しません。
 
 ## 機能
 
@@ -20,11 +20,11 @@ QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測�
 | QnapHomeHub | `8787` | SwitchBot・Matter連携の管理・操作依頼 |
 | 共通radio | TCPポートなし | NAS内Unixソケットで依頼を受け、USB BLEを直列制御 |
 
-QnapHomeHub 0.3.0のradioサービスとの共用が既定です。通常はSelfCare用BlueZを維持し、SwitchBot操作時だけNobleへ切り替えます。別のドングルを使う場合、またはHomeHubを使わない場合は直接接続も選べます。[USB Bluetooth導入・共存手順](docs/bluetooth-homehub.md)を参照してください。
+QnapHomeHub 0.3.0のradioサービスとの共用が既定です。旧構成の場合は「設定・バックアップ → 共通Bluetoothのセットアップ → 共通Bluetooth構成へ更新」を押してください。標準構成を確認し、設定の退避・適用・起動確認までNASが実行します。[移行と復旧の詳細](docs/homehub-migration.md)を参照してください。通常はSelfCare用BlueZを維持し、SwitchBot操作時だけNobleへ切り替えます。別のドングルを使う場合、またはHomeHubを使わない場合は直接接続も選べます。[USB Bluetooth導入・共存手順](docs/bluetooth-homehub.md)を参照してください。
 
 ## Web画面と起動
 
-QPKGをApp Centerでインストール・有効化し、`http://<NASのIP>:17863/` を開きます。QPKGはIPv4全インターフェースで待ち受け、接続元サブネットを限定しません。TailscaleでNASのIPv4へ到達できる場合も同じポートです。認証を設けない構成のため、到達できる人は健康記録の閲覧・編集とSelfCareの更新ができます。NASのアクセス設定で利用範囲を管理してください。
+QPKGをApp Centerでインストール・有効化し、`http://<NASのIP>:17863/` を開きます。QPKGはIPv4全インターフェースで待ち受け、接続元サブネットを限定しません。TailscaleでNASのIPv4へ到達できる場合も同じポートです。認証を設けない構成のため、到達できる人は健康記録の閲覧・編集、SelfCareの更新、HomeHub構成の移行ができます。NASのアクセス設定で利用範囲を管理してください。
 
 Python 3.8以降と既存の `/share/Container` 共有フォルダを使います。`python3-path` がPython3 QPKG、`/opt/bin/python3.11`、`/opt/bin/python3`などを探索します。特殊な場所は `SELFCARE_PYTHON` で指定できます。起動に `nohup` は不要です。Web・保存・CSV機能はPython標準ライブラリだけで動作します。共通radioを利用する場合、NAS本体へのBleakやBlueZの追加は不要です。
 
@@ -64,7 +64,7 @@ HEM-6232Tは血圧・脈拍、HBF-228Tは体重・体脂肪率・骨格筋率・
 
 ## Webからの自己更新（0.3.1以降）
 
-0.3.1からは上記ボタンで0.3.2へ更新できます。0.3.0以前から今回版への切替だけはApp CenterでQPKGを手動適用してください。以後は「設定・バックアップ → SelfCareの更新 → 更新を確認 → vX.Y.Zに更新する」で、ブラウザへQPKGをダウンロードせず更新できます。
+0.3.1以降からは上記ボタンで0.3.3へ更新できます。0.3.0以前から今回版への切替だけはApp CenterでQPKGを手動適用してください。以後は「設定・バックアップ → SelfCareの更新 → 更新を確認 → vX.Y.Zに更新する」で、ブラウザへQPKGをダウンロードせず更新できます。
 
 ボタンを押して確認すると、独立した更新ワーカーがNAS上で最新安定版を再確認し、CPUに合う公式リポジトリのQPKGを取得・SHA-256検証します。測定DBと設定をバックアップし、SelfCareを停止してQDKインストーラーを実行します。既存QPKGと同じボリュームに適用し、QPKG登録バージョンと新しいWebサービスの応答が一致してから完了と表示します。状態とログはNASに保存するので、Web再起動・画面再読み込み後も確認できます。nohupは不要です。
 
@@ -96,8 +96,8 @@ python3 webapp.py --port 17863 --data-dir /tmp/selfcare-dev
 開発起動はloopback待ち受けです。`--lan` で全IPv4インターフェースを使用します。CIはPython・DOM操作テストとQDKのx86_64 / arm_64ビルドを行います。実機BLE・NASのコンテナ起動はCIの対象外です。
 
 ```sh
-./selfcare-update check --current-version 0.3.2 --arch x86_64
-./selfcare-update download --current-version 0.3.2 --arch x86_64 --dest /path/to/private/staging
+./selfcare-update check --current-version 0.3.3 --arch x86_64
+./selfcare-update download --current-version 0.3.3 --arch x86_64 --dest /path/to/private/staging
 ```
 
 上記CLIのdownloadは検証付き取得専用です。通常の適用にはWebの更新ボタンを使います。配布名は `QnapSelfCare_X.Y.Z_<arch>.qpkg` です。GitHubが返すSHA-256 digestとダウンロードを照合し、不一致・digest欠落時は取得を完了しません。

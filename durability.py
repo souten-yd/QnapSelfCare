@@ -13,6 +13,10 @@ class DataUnavailable(RuntimeError):
     pass
 
 
+class ResourceBusy(DataUnavailable):
+    pass
+
+
 class CorruptDatabase(ValueError):
     pass
 
@@ -48,7 +52,7 @@ def file_lock(path):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise DataUnavailable('処理が実行中です。SelfCareの停止または処理の完了を待ってください') from None
+            raise ResourceBusy('別の処理が実行中です。処理の完了を待ってください') from None
         yield
     finally:
         os.close(fd)

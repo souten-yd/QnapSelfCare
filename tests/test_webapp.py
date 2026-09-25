@@ -18,6 +18,9 @@ class WebAppTests(unittest.TestCase):
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), webapp.Handler)
         self.server.store = Store(Path(self.tmp.name) / "data", state_directory=self.tmp.name)
         self.server.protection = webapp.ProtectionManager(self.server.store)
+        self.server.migration = Mock()
+        self.server.migration.status.return_value = {'busy': False, 'can_restore': False}
+        self.server.migration.apply.return_value = {'busy': True, 'phase': 'checking'}
         self.server.collector = Mock()
         self.server.collector.diagnostics.return_value = {'mode': 'homehub'}
         self.server.updates = Mock()
@@ -140,6 +143,18 @@ class WebAppTests(unittest.TestCase):
                 self.request(route, body)
             self.assertEqual(error.exception.code, 503)
         self.assertEqual(self.server.store.path.read_bytes(), b'corrupt')
+
+    def test_homehub_migration_is_explicit_and_rejects_extra_targets(self):
+        with self.request('/api/homehub-migration') as response:
+            self.assertFalse(json.load(response)['busy'])
+        self.server.migration.apply.assert_not_called()
+        for body, header in (({'action': 'migrate'}, False), ({'action': 'migrate', 'path': '/other'}, True)):
+            with self.assertRaises(HTTPError):
+                self.request('/api/homehub-migration', body, header=header)
+        self.server.migration.apply.assert_not_called()
+        with self.request('/api/homehub-migration', {'action': 'migrate'}) as response:
+            self.assertEqual(response.status, 202)
+        self.server.migration.apply.assert_called_once_with('migrate')
 
 if __name__ == '__main__':
     unittest.main()
