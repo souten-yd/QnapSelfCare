@@ -11,8 +11,9 @@ import ble_protocol as protocol
 
 
 class Session:
-    def __init__(self, client):
+    def __init__(self, client, trace=None):
         self.client = client
+        self.trace = trace
         self.frames = asyncio.Queue()
         self.unlocks = asyncio.Queue()
         self.channels = {}
@@ -39,13 +40,22 @@ class Session:
             self.frames.put_nowait(frame[:size])
 
     async def unlock(self, opcode, key, expected):
+        if self.trace is not None:
+            self.trace['stage'] = {1: 'unlock', 2: 'pairing_mode', 0: 'key_programming'}.get(opcode, 'unlock')
+            self.trace['expected_unlock_status'] = bytes([expected, 0]).hex()
         await self.client.write_gatt_char(protocol.UNLOCK, bytes([opcode]) + key, response=True)
         data = await asyncio.wait_for(self.unlocks.get(), 10)
+        if self.trace is not None:
+            # Only the two-byte status. Never log the application key or bonding material.
+            self.trace['unlock_status'] = data[:2].hex()
         if data[:2] != bytes([expected, 0]):
             raise ValueError("ペアリング応答が一致しません。機器を-P-表示にして再実行してください" if opcode != 1 else
                              "保存したペアリングキーが一致しません。機器の再ペアリングが必要です")
 
     async def request(self, opcode, address=0, length=0):
+        if self.trace is not None:
+            self.trace['stage'] = 'read' if opcode == 1 else 'session'
+            self.trace['last_command'] = {'opcode': opcode, 'address': address, 'length': length}
         self.channels.clear()
         while not self.frames.empty():
             self.frames.get_nowait()
@@ -54,7 +64,12 @@ class Session:
         data = await asyncio.wait_for(self.frames.get(), 10)
         if isinstance(data, Exception):
             raise data
-        return protocol.response(data, opcode, address, length)
+        try:
+            return protocol.response(data, opcode, address, length)
+        except ValueError:
+            if self.trace is not None and opcode == 1:
+                self.trace['invalid_response_hex'] = data[:64].hex()
+            raise
 
     async def records(self, device):
         profile = protocol.PROFILES[device["model"]]
@@ -63,16 +78,32 @@ class Session:
             base = profile["bases"][int(slot) - 1]
             size = profile["size"] * profile["count"]
             payload = bytearray()
+            detail = {'slot': int(slot), 'bytes_read': 0, 'valid': 0, 'empty': 0, 'invalid': 0,
+                      'valid_samples': [], 'invalid_samples': []}
+            if self.trace is not None:
+                self.trace['slots'].append(detail)
             for cursor in range(0, size, 32):
                 payload.extend(await self.request(1, base + cursor, min(32, size - cursor)))
+                detail['bytes_read'] = len(payload)
             for cursor in range(0, size, profile["size"]):
+                raw = bytes(payload[cursor:cursor + profile["size"]])
                 try:
-                    record = protocol.decode(device["model"], payload[cursor:cursor + profile["size"]], device["utc_offset_minutes"])
-                except ValueError:
+                    record = protocol.decode(device["model"], raw, device["utc_offset_minutes"])
+                except ValueError as error:
                     invalid += 1
+                    detail['invalid'] += 1
+                    if self.trace is not None and len(detail['invalid_samples']) < 2:
+                        detail['invalid_samples'].append({'index': cursor // profile['size'],
+                                                          'reason': str(error)[:120], 'raw_hex': raw.hex()})
                     continue
                 if record:
+                    detail['valid'] += 1
+                    if self.trace is not None and len(detail['valid_samples']) < 2:
+                        detail['valid_samples'].append({'index': cursor // profile['size'],
+                                                        'measured_at': record['measured_at'], 'values': record['values']})
                     records.append(dict(record, user_id=user_id, device_id=device["id"], slot=int(slot)))
+                else:
+                    detail['empty'] += 1
         return {"records": records, "invalid_records": invalid}
 
 
@@ -120,12 +151,14 @@ async def register_agent(address):
     return bus, manager, path
 
 
-async def operate(request):
+async def operate(request, trace=None):
     try:
         from bleak import BleakClient, BleakScanner
     except ImportError:
         raise ValueError("USB Bluetooth用のbleakが未導入です。管理画面のセットアップ手順を確認してください") from None
     adapter = request.get("adapter", "hci0")
+    if trace is not None:
+        trace['stage'] = 'adapter'
     # Only run inside an exclusive radio operation. Enable the selected adapter;
     # do not reset controllers or change unrelated adapters.
     from dbus_fast import BusType, Message, MessageType, Variant
@@ -145,16 +178,24 @@ async def operate(request):
                             for d, adv in devices.values()]}
     device = request["device"]
     address = device["address"]
+    if trace is not None:
+        trace['stage'] = 'discovery'
     found = await BleakScanner.find_device_by_address(address, timeout=20, adapter=adapter)
     if found is None:
         raise ValueError("機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください")
     agent = None
     try:
+        if trace is not None:
+            trace['stage'] = 'connection'
         agent = await register_agent(address)
         async with BleakClient(found, adapter=adapter, timeout=20) as client:
+            if trace is not None:
+                trace['stage'] = 'service'
             if not client.services.get_service(protocol.SERVICE):
                 raise ValueError("対応するOmronサービスがありません。機種とアドレスを確認してください")
-            session = Session(client)
+            session = Session(client, trace)
+            if trace is not None:
+                trace['stage'] = 'subscribe'
             await session.subscribe()
             if request["action"] == "pair":
                 await session.unlock(2, bytes(16), 0x82)
@@ -164,7 +205,9 @@ async def operate(request):
                 await session.unlock(0, key, 0x80)
                 await session.request(0, length=16)
                 await session.request(15)
-                return {"paired": True}
+                if trace is not None:
+                    trace['stage'] = 'completed'
+                return {"paired": True, **({'diagnostic': trace} if trace is not None else {})}
             key = request.get("key")
             if not key:
                 raise ValueError("先にペアリングしてください")
@@ -172,6 +215,9 @@ async def operate(request):
             await session.request(0, length=16)
             result = await session.records(device)
             await session.request(15)
+            if trace is not None:
+                trace['stage'] = 'completed'
+                result['diagnostic'] = trace
             return result
     finally:
         if agent:
@@ -183,16 +229,19 @@ async def operate(request):
 
 
 def main():
+    trace = None
     try:
         lock_path = os.environ.get("SELFCARE_BLE_LOCK", "/tmp/qnapselfcare-ble.lock")
         lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         request = json.loads(sys.stdin.read(65536))
-        result = asyncio.run(asyncio.wait_for(operate(request), 180))
+        if request.get('action') in ('pair', 'sync') and request.get('diagnostic') is True:
+            trace = {'stage': 'starting', 'slots': []}
+        result = asyncio.run(asyncio.wait_for(operate(request, trace), 180))
         print(json.dumps(result))
     except Exception as error:
         message = str(error) or type(error).__name__
-        print(json.dumps({"error": message}))
+        print(json.dumps({"error": message, **({'diagnostic': trace} if trace is not None else {})}))
         return 1
     return 0
 

@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -241,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/restore":
                     result = self.store.restore(body)
                 elif path == "/api/jobs":
-                    result = self.server.collector.submit(body.get("action"), body.get("device_id"), body.get("adapter", "hci0"), body.get("exclusive", False), body.get("transport", "homehub"))
+                    result = self.server.collector.submit(body.get("action"), body.get("device_id"), body.get("adapter", "hci0"), body.get("exclusive", False), body.get("transport", "homehub"), body.get('diagnostic', False))
                 else:
                     self._json(405, {"error": "対応していない操作です"})
                     return

@@ -1,11 +1,12 @@
 import asyncio
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock
 
 import ble_protocol as p
 from ble_worker import Session
-from collectors import CollectorManager
+from collectors import BluetoothFailure, CollectorManager, bridge_request
 from storage import Store
 
 
@@ -76,6 +77,70 @@ class ProtocolTests(unittest.TestCase):
             import json
             result = json.loads(store.jobs()[0]['result'])
             self.assertEqual((result['adapter'], result['transport']), ('hci1', 'homehub'))
+
+    def test_diagnostic_sync_counts_slots_and_keeps_only_bounded_samples(self):
+        async def exercise():
+            raw = bytearray(32)
+            raw[2:14] = bytes.fromhex('3e8a64004b1a399e2809c9cc')
+            raw[26:28] = bytes.fromhex('5780')
+            invalid = bytearray(32)
+            invalid[26:28] = bytes.fromhex('5780')  # nonzero weight, impossible month
+            memory = bytes(raw) + bytes(invalid) * 3 + bytes(32 * 26)
+            trace = {'stage': 'starting', 'slots': []}
+            session = Session(AsyncMock(), trace)
+            async def read(opcode, address, length):
+                return memory[address - p.PROFILES['HBF-228T']['bases'][0]:address - p.PROFILES['HBF-228T']['bases'][0] + length]
+            session.request = read
+            result = await session.records({'model': 'HBF-228T', 'bindings': {'1': 'private-user-id'},
+                                            'utc_offset_minutes': 540, 'id': 'device-id'})
+            detail = trace['slots'][0]
+            self.assertEqual((detail['valid'], detail['invalid'], detail['empty']), (1, 3, 26))
+            self.assertEqual(len(detail['invalid_samples']), 2)
+            self.assertEqual(detail['valid_samples'][0]['values']['weight'], 70)
+            self.assertEqual(result['invalid_records'], 3)
+            self.assertNotIn('private-user-id', str(trace))
+        asyncio.run(exercise())
+
+    def test_diagnostic_failure_persists_stage_without_pairing_key(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            user = store.save_user({'name': 'test'})
+            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                                        'bindings': {'1': user['id']}})
+            store.pairing_key(device['address'], '22' * 16)
+            def failed(request, _):
+                self.assertTrue(request['diagnostic'])
+                raise BluetoothFailure('応答なし', {'stage': 'read', 'last_command': {'address': 704}})
+            manager = CollectorManager(store, runner=failed)
+            manager.submit('sync', device['id'], diagnostic=True)
+            manager.process(manager.queue.get_nowait())
+            job = store.jobs()[0]
+            self.assertEqual(job['state'], 'failed')
+            self.assertEqual(__import__('json').loads(job['result'])['diagnostic']['stage'], 'read')
+            self.assertNotIn('22' * 16, str(job))
+            with self.assertRaises(ValueError):
+                manager.submit('scan', diagnostic=True)
+
+    def test_pairing_diagnostic_records_status_only_and_propagates_bridge_failure(self):
+        async def exercise():
+            trace = {'stage': 'starting', 'slots': []}
+            session = Session(AsyncMock(), trace)
+            session.unlocks.put_nowait(bytes.fromhex('820f') + bytes(14))
+            with self.assertRaises(ValueError):
+                await session.unlock(2, bytes.fromhex('ab' * 16), 0x82)
+            self.assertEqual(trace['stage'], 'pairing_mode')
+            self.assertEqual(trace['unlock_status'], '820f')
+            self.assertEqual(trace['expected_unlock_status'], '8200')
+            self.assertNotIn('ab' * 16, str(trace))
+        asyncio.run(exercise())
+        response = Mock(status=400)
+        response.read.return_value = b'{"error":"pairing failed","diagnostic":{"stage":"pairing_mode"}}'
+        connection = Mock()
+        connection.getresponse.return_value = response
+        with patch('collectors.UnixHTTPConnection', return_value=connection):
+            with self.assertRaises(BluetoothFailure) as caught:
+                bridge_request('/tmp/dummy', {'action': 'pair'})
+        self.assertEqual(caught.exception.diagnostic, {'stage': 'pairing_mode'})
 
 
 if __name__ == '__main__':

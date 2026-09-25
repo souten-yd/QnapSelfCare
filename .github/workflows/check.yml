@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.6 >/dev/null 2>&1; then
-            echo 'Release v0.3.6 already exists; leaving it unchanged.'
+          if gh release view v0.3.7 >/dev/null 2>&1; then
+            echo 'Release v0.3.7 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.6 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.6' \
-            --notes 'Import multiple same-day OMRON connect blood pressure and body composition measurements through a previewed, atomic history transfer. Add per-user BMI and blood pressure reference lines, estimated BMR, meal notes, goal monitoring, and opt-in coaching with ControlDeck, QnapAssistant, local OpenAI-compatible models, or OpenRouter. Preserve wellness data in backups without exporting API keys.' \
+          gh release create v0.3.7 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.7' \
+            --notes 'Add opt-in diagnostic pairing and sync for Omron HBF-228T and HEM-6232T. Display BLE stage, per-slot valid/empty/invalid counts and bounded measurement samples in job history after a manual diagnostic run. Shared radio requires QnapHomeHub 0.3.1; normal automatic sync remains unchanged.' \
             --target "$GITHUB_SHA"

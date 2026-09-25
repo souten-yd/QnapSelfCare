@@ -34,6 +34,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  d.getElementById('bindings').querySelector('select').selectedIndex=1;submit('device-form');
  await until(()=>d.getElementById('message').textContent==='機器設定を保存しました');
  assert.match(d.getElementById('device-list').textContent,/Test cuff/);
+ assert.match(d.getElementById('device-list').textContent,/診断付きペアリング/);
  assert.equal((await (await fetch(base+'/api/devices')).json())[0].transport,'homehub');
  const actualFetch=w.fetch;
  w.fetch=(url,init)=>url==='/api/jobs'&&init?.method==='POST'&&JSON.parse(init.body).action==='scan'?Promise.resolve(new Response(JSON.stringify({id:'scan-test',state:'queued'}),{headers:{'Content-Type':'application/json'}})):url==='/api/jobs'&&(!init||!init.method)?Promise.resolve(new Response(JSON.stringify([{
