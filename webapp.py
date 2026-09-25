@@ -22,7 +22,7 @@ from protection import ProtectionManager
 from homehub_migration import MigrationManager
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
