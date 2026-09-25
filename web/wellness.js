@@ -29,8 +29,8 @@ $('meal-form').addEventListener('submit',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');const f=$('meal-form');await api('/api/wellness/meals',{user_id,meal:{note:f.elements.note.value,calories:f.elements.calories.value?Number(f.elements.calories.value):null}});f.reset();await refreshWellness();message('食事メモを保存しました');
 }));
 $('coach-form').addEventListener('submit',guarded(async()=>{
- const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');const f=$('coach-form');const result=await api('/api/ai/consult',{user_id,mode:f.elements.mode.value,question:f.elements.question.value,consent:f.elements.consent.checked});
- $('coach-answer').textContent=result.answer;$('coach-answer').hidden=false;$('coach-plan').hidden=false;f.elements.consent.checked=false;message('相談への回答を受け取りました');
+ const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');const f=$('coach-form');const result=await api('/api/ai/consult',{user_id,mode:f.elements.mode.value,question:f.elements.question.value});
+ $('coach-answer').textContent=result.answer;$('coach-answer').hidden=false;$('coach-plan').hidden=false;message('相談への回答を受け取りました');
 }));
 $('coach-plan').addEventListener('click',()=>{const field=$('wellness-form').elements.plan_text;field.value=$('coach-answer').textContent.slice(0,8000);field.focus();message('計画欄へコピーしました。内容を確認して保存してください');});
 async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+config.provider+(config.provider==='openrouter'?'（外部サービス）':'（ローカル）');}
@@ -38,3 +38,9 @@ $('ai-form').addEventListener('submit',guarded(async()=>{const f=$('ai-form');aw
 $('ai-key-form').addEventListener('submit',guarded(async()=>{const f=$('ai-key-form');await api('/api/ai/key',{provider:$('ai-form').elements.provider.value,key:f.elements.key.value});f.reset();await refreshAiSettings();message('APIキーを更新しました');}));
 $('ai-form').elements.provider.addEventListener('change',()=>{const f=$('ai-form');const p=f.elements.provider.value;if(p==='qnapassistant')f.elements.base_url.value='http://127.0.0.1:11435/v1';else if(p==='openrouter')f.elements.base_url.value='https://openrouter.ai/api/v1';else f.elements.base_url.value='';f.elements.model.value=p==='openrouter'?'openai/gpt-4o-mini':'auto';});
 refreshAiSettings().catch(e=>message(e.message,true));
+
+$('ai-test').addEventListener('click',guarded(async()=>{
+ $('ai-test-result').textContent='接続確認中…（最大5分）';
+ try{const r=await api('/api/ai/test',{});$('ai-test-result').textContent='接続成功：'+r.answer;}
+ catch(error){$('ai-test-result').textContent=error.message;throw error;}
+}));

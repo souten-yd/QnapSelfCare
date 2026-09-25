@@ -57,6 +57,10 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.equal(registered.model,'HBF-228T');assert.equal(registered.adapter,'hci1');
  assert.equal(registered.bindings['1'],(await (await fetch(base+'/api/users')).json())[0].id);
  assert.equal(registered.auto_sync,true);
+ assert.equal(registered.sync_mode,'listen');
+ assert.equal(d.querySelector('#coach-form [name=consent]'),null);
+ assert(d.getElementById('ai-test'));
+ assert.equal(d.getElementById('device-form').elements.sync_mode.value,'listen');
  d.querySelector('[data-page="wellness"]').click();
  await until(()=>d.getElementById('wellness-summary').textContent.includes('直近の血圧'));
  const wellbeing=d.getElementById('wellness-form');wellbeing.elements.height_cm.value='180';wellbeing.elements.age.value='40';wellbeing.elements.sex.value='male';submit('wellness-form');

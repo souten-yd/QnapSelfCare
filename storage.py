@@ -243,6 +243,7 @@ class Store:
             if not include_archived:
                 result = [d for d in result if not d.get("archived", False)]
             for device in result:
+                device.setdefault("sync_mode", "listen" if device["transport"] == "homehub" else "interval")
                 device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
         return result
 
@@ -272,10 +273,15 @@ class Store:
         transport = payload.get("transport", "homehub")
         if transport not in ("homehub", "direct"):
             raise ValueError("Bluetooth接続方式が不正です")
+        sync_mode = payload.get("sync_mode", "listen" if transport == "homehub" else "interval")
+        if sync_mode not in ("listen", "interval"):
+            raise ValueError("同期方式が不正です")
+        if sync_mode == "listen" and transport != "homehub":
+            raise ValueError("待ち受けには共通Bluetoothサービスを選択してください")
         offset = integer(payload.get("utc_offset_minutes", 540), "時差（分）", -720, 840)
         return {"name": text(payload.get("name", model), "機器名", 60), "model": model,
                 "address": address, "adapter": adapter, "bindings": bindings, "transport": transport,
-                "auto_sync": payload.get("auto_sync", False), "exclusive": payload.get("exclusive", False),
+                "sync_mode": sync_mode, "auto_sync": payload.get("auto_sync", False), "exclusive": payload.get("exclusive", False),
                 "interval": integer(payload.get("interval", 300), "同期間隔", 60, 86400),
                 "utc_offset_minutes": offset}
 
@@ -543,7 +549,7 @@ class Store:
             device_map = {}
             for device in devices:
                 did = identifier(device.get("id"), "機器ID")
-                config = self.validate_device(device, user_ids)
+                config = self.validate_device(dict(device, sync_mode=device.get("sync_mode", "listen" if device.get("transport", "homehub") == "homehub" else "interval")), user_ids)
                 config["auto_sync"] = False
                 if not isinstance(device.get("archived", False), bool):
                     raise ValueError("削除済み機器の状態が不正です")

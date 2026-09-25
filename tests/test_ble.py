@@ -169,12 +169,45 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(store.records()['total'], 1)
             self.assertEqual(store.jobs()[0]['state'], 'done')
 
-    def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):
+    def test_listener_defaults_and_event_cooldown_without_periodic_scan(self):
         with tempfile.TemporaryDirectory() as root:
             store = Store(root)
             user = store.save_user({'name': 'test'})
             device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
                 'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 100})
+            self.assertEqual(device['sync_mode'], 'listen')
+            store.pairing_key(device['address'], '11' * 16)
+            runner = Mock(return_value={'records': []})
+            manager = CollectorManager(store, runner=runner)
+            response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
+            with patch('collectors.bridge_request', return_value=response) as bridge, patch('collectors.time.monotonic', return_value=100):
+                manager.schedule()
+                runner.assert_not_called()
+                self.assertEqual(bridge.call_args.kwargs['endpoint'], '/watch')
+                self.assertEqual(manager.queue.qsize(), 1)
+                manager.process(manager.queue.get_nowait())
+            with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=300):
+                manager.schedule()
+                self.assertTrue(manager.queue.empty())  # Same event is not consumed twice.
+            response['events'][0]['at'] = 1235
+            with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=303):
+                manager.schedule()
+                self.assertEqual(manager.queue.qsize(), 1)
+                manager.process(manager.queue.get_nowait())
+            store.save_device(dict(device, auto_sync=False))
+            with patch('collectors.bridge_request', return_value={'supported': True, 'ready': False, 'events': []}) as bridge, patch('collectors.time.monotonic', return_value=306):
+                manager.schedule()
+                self.assertEqual(bridge.call_args.args[1]['addresses'], [])
+                self.assertFalse(manager.watch_configured)
+            with self.assertRaises(ValueError):
+                store.save_device(dict(device, transport='direct', sync_mode='listen'))
+
+    def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            user = store.save_user({'name': 'test'})
+            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                'bindings': {'1': user['id']}, 'auto_sync': True, 'sync_mode': 'interval', 'interval': 100})
             store.pairing_key(device['address'], '11' * 16)
             runner = Mock(return_value={'devices': []})
             manager = CollectorManager(store, runner=runner)

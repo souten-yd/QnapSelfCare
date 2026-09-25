@@ -120,3 +120,11 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
  .record-controls .row{flex-wrap:nowrap}.record-controls button{font-size:12px;padding:6px 10px}
  .history-table td[colspan]{grid-column:1/-1}
 }
+
+@media(max-width:700px){
+ #wellness-form .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+ #wellness-form label{font-size:12px;gap:4px}
+ #wellness-form input,#wellness-form select{width:100%;font-size:16px;padding:6px;min-height:44px}
+ #wellness-form .form-grid:first-child>label:nth-child(3){grid-column:1/-1}
+ #wellness-form p{font-size:12px;margin:8px 0}
+}
