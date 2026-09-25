@@ -1,0 +1,12 @@
+QnapSelfCare 0.1.0 preview
+
+This QPKG installs a command-line GitHub Release update checker only.
+HEM-6232T and HBF-228T measurement collection is not implemented.
+Python 3 is required for the update checker; it is not bundled.
+
+Run over SSH from the QPKG installation directory:
+  ./selfcare-update check --current-version 0.1.0 --arch x86_64
+or replace x86_64 with arm_64 on an ARM64 NAS.
+
+The download action verifies size and SHA-256 and stages a QPKG in an
+existing private directory. Apply updates manually in App Center.
