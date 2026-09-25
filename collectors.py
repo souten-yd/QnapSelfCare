@@ -21,6 +21,12 @@ ACTIVE_WORKERS = set()
 WORKER_LOCK = threading.Lock()
 
 
+class BluetoothFailure(ValueError):
+    def __init__(self, message, diagnostic=None):
+        super().__init__(message)
+        self.diagnostic = diagnostic if isinstance(diagnostic, dict) else None
+
+
 class UnixHTTPConnection(http.client.HTTPConnection):
     def __init__(self, path, timeout=320):
         super().__init__("localhost", timeout=timeout)
@@ -41,7 +47,7 @@ def bridge_request(path, payload=None):
         response = connection.getresponse()
         data = json.loads(response.read(4 * 1024 * 1024))
         if response.status != 200:
-            raise ValueError(data.get("error", "Bluetoothブリッジに接続できません"))
+            raise BluetoothFailure(data.get("error", "Bluetoothブリッジに接続できません"), data.get('diagnostic'))
         return data
     finally:
         connection.close()
@@ -76,7 +82,7 @@ def run_worker(request, directory):
     except json.JSONDecodeError:
         raise ValueError("Bluetooth処理が終了しました。Python/BlueZの導入状態を確認してください") from None
     if process.returncode or response.get("error"):
-        raise ValueError(response.get("error", "Bluetooth処理に失敗しました"))
+        raise BluetoothFailure(response.get("error", "Bluetooth処理に失敗しました"), response.get('diagnostic'))
     return response
 
 
@@ -104,8 +110,10 @@ class CollectorManager:
                 process.terminate()
         self.thread.join(timeout=3)
 
-    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub"):
+    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False):
         self.store.require_available()
+        if not isinstance(diagnostic, bool) or (diagnostic and action not in ('pair', 'sync')):
+            raise ValueError('詳細診断は手動のペアリング・履歴同期でのみ使用できます')
         if action not in ("scan", "pair", "sync"):
             raise ValueError("対応していない操作です")
         device = self.store.device(device_id) if device_id else None
@@ -132,14 +140,17 @@ class CollectorManager:
                 raise ValueError("同じ機器の処理が実行中、または待機中です")
             identifier = self.store.create_job(device_id, action)
             self.pending.add(pending_key)
-            self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport))
+            self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport, diagnostic))
         return {"id": identifier, "state": "queued"}
 
     def process(self, item):
-        identifier, pending_key, action, device, adapter, transport = item
+        identifier, pending_key, action, device, adapter, transport, diagnostic = item
         self.store.update_job(identifier, "running", "Bluetooth処理を実行しています")
+        trace = None
         try:
             request = {"action": action, "device": device, "adapter": adapter, "transport": transport}
+            if diagnostic:
+                request['diagnostic'] = True
             if action == "pair":
                 # Preserve an attempted key separately until programming succeeds.
                 key_path = self.store.directory.parent / "config" / ("pair-" + device["id"] + ".json")
@@ -153,6 +164,8 @@ class CollectorManager:
             elif action == "sync":
                 request["key"] = self.store.pairing_key(device["address"])
             result = self.runner(request, self.store.directory)
+            if diagnostic:
+                trace = result.get('diagnostic')
             if result.get("error"):
                 raise ValueError(result["error"])
             if action == "pair":
@@ -165,14 +178,23 @@ class CollectorManager:
                 records = result.get("records", [])
                 saved = self.store.add_records(records, "bluetooth") if records else {"inserted": 0, "duplicates": 0}
                 invalid = result.get("invalid_records", 0)
-                result = dict(saved, invalid_records=invalid)
+                result = dict(saved, invalid_records=invalid, **({'diagnostic': trace} if diagnostic and trace else {}))
                 message = f"{saved['inserted']}件追加・{saved['duplicates']}件重複・{invalid}件日時不正"
             else:
                 result = dict(result, adapter=adapter, transport=transport)
                 message = f"{len(result.get('devices', []))}台検出しました"
             self.store.update_job(identifier, "done", message, result)
         except Exception as error:
-            self.store.update_job(identifier, "failed", str(error) or type(error).__name__)
+            trace = getattr(error, 'diagnostic', None) or trace
+            # The peer is another local service, but do not persist unbounded or malformed diagnostics.
+            if diagnostic and isinstance(trace, dict):
+                encoded = json.dumps(trace, ensure_ascii=False)
+                if len(encoded) > 16000:
+                    trace = {'stage': str(trace.get('stage', 'unknown'))[:40], 'truncated': True}
+            else:
+                trace = None
+            self.store.update_job(identifier, "failed", str(error) or type(error).__name__,
+                                  {'diagnostic': trace} if trace else None)
         finally:
             with self.lock:
                 self.pending.discard(pending_key)
