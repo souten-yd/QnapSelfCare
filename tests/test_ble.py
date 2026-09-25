@@ -66,6 +66,17 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manager.submit('scan', transport='direct')
 
+    def test_scan_result_keeps_adapter_and_transport_for_registration(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            manager = CollectorManager(store, runner=lambda request, directory: {'devices': [
+                {'address': 'AA:BB:CC:DD:EE:FF', 'name': 'BLEsmart_0001000B', 'rssi': -40}]})
+            manager.submit('scan', adapter='hci1', transport='homehub')
+            manager.process(manager.queue.get_nowait())
+            import json
+            result = json.loads(store.jobs()[0]['result'])
+            self.assertEqual((result['adapter'], result['transport']), ('hci1', 'homehub'))
+
 
 if __name__ == '__main__':
     unittest.main()

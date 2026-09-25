@@ -34,5 +34,25 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent==='機器設定を保存しました');
  assert.match(d.getElementById('device-list').textContent,/Test cuff/);
  assert.equal((await (await fetch(base+'/api/devices')).json())[0].transport,'homehub');
- console.log('UI create user → save/edit record → chart → register shared-radio device: passed');
+ const actualFetch=w.fetch;
+ w.fetch=(url,init)=>url==='/api/jobs'&&init?.method==='POST'&&JSON.parse(init.body).action==='scan'?Promise.resolve(new Response(JSON.stringify({id:'scan-test',state:'queued'}),{headers:{'Content-Type':'application/json'}})):url==='/api/jobs'&&(!init||!init.method)?Promise.resolve(new Response(JSON.stringify([{
+  id:'scan-test',action:'scan',state:'done',created_at:new Date().toISOString(),message:'2台検出しました',
+  result:JSON.stringify({adapter:'hci1',transport:'homehub',devices:[
+   {name:'BLEsmart_0001000B123456',address:'11:22:33:44:55:66',rssi:-40},
+   {name:'名前なし',address:'11:22:33:44:55:77',rssi:-65}]})
+ }]),{headers:{'Content-Type':'application/json'}})):actualFetch(url,init);
+ d.getElementById('scan').click();
+ await until(()=>d.querySelectorAll('#scan-results .scan-result').length===2);
+ const candidates=d.querySelectorAll('#scan-results .scan-result');
+ assert.equal(candidates.length,2);
+ assert.equal(candidates[0].querySelector('select').value,'HBF-228T');
+ assert.equal(candidates[1].querySelector('select').value,'');
+ assert.equal(candidates[0].querySelectorAll('select')[1].value,(await (await fetch(base+'/api/users')).json())[0].id);
+ candidates[0].querySelector('button').click();
+ await until(()=>d.getElementById('message').textContent.includes('登録してペアリングを開始しました'));
+ const registered=(await (await fetch(base+'/api/devices')).json()).find(x=>x.address==='11:22:33:44:55:66');
+ assert.equal(registered.model,'HBF-228T');assert.equal(registered.adapter,'hci1');
+ assert.equal(registered.bindings['1'],(await (await fetch(base+'/api/users')).json())[0].id);
+ assert.equal(registered.auto_sync,true);
+ console.log('UI records, discovery → model/user selection → registration and pairing queued: passed');
 }finally{dom?.window.close();child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));fs.rmSync(data,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
