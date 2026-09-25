@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.17"
+VERSION = "0.3.18"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -214,10 +214,14 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) != {'user_id', 'profile'}:
                         raise ValueError('利用者と健康設定を指定してください')
                     result = self.store.save_wellness_profile(body['user_id'], body['profile'])
-                elif path in ('/api/wellness/activity', '/api/wellness/weight-plan'):
+                elif path == '/api/wellness/activity':
+                    if set(body) not in ({'user_id', 'entry'}, {'user_id', 'entry', 'reuse'}):
+                        raise ValueError('利用者と活動記録を指定してください')
+                    result = self.store.save_activity(body['user_id'], body['entry'], body.get('reuse', False))
+                elif path in ('/api/wellness/weight-plan', '/api/wellness/routine'):
                     if set(body) != {'user_id', 'entry'}:
-                        raise ValueError('利用者と記録を指定してください')
-                    handler = self.store.save_activity if path.endswith('activity') else self.store.save_weight_plan
+                        raise ValueError('利用者と設定を指定してください')
+                    handler = self.store.save_weight_plan if path.endswith('weight-plan') else self.store.save_activity_routine
                     result = handler(body['user_id'], body['entry'])
                 elif path == '/api/wellness/meals':
                     if set(body) != {'user_id', 'meal'}:
