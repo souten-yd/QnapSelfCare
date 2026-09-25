@@ -33,6 +33,7 @@ jobs:
       - run: python -m py_compile updater.py
       - run: python -m py_compile webapp.py
       - run: sh -n qpkg/shared/selfcare.sh
+      - run: sh -n qpkg/shared/selfcare-update qpkg/shared/python3-path
       - name: Install pinned QDK
         run: |
           curl --fail --location --retry 3 --output /tmp/qdk.deb https://github.com/qnap-dev/QDK/releases/download/v2.5.3/qdk_2.5.3_amd64.deb
@@ -46,12 +47,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.2.3 >/dev/null 2>&1; then
-            echo 'Release v0.2.3 already exists; leaving it unchanged.'
+          if gh release view v0.2.4 >/dev/null 2>&1; then
+            echo 'Release v0.2.4 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.2.3 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.2.3 preview' \
-            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard listens on the NAS LAN, loopback and assigned tailscale0 IPv4, and accepts connections routed over the LAN or Tailscale; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
+          gh release create v0.2.4 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.2.4 preview' \
+            --notes 'Preview QPKG: resolves Python 3.8+ from the QNAP Python3 QPKG, /opt/bin or PATH for both web startup and update checker. Read-only web dashboard without login, App Center icon and release update checker. The dashboard listens on the NAS LAN, loopback and assigned tailscale0 IPv4; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
             --target "$GITHUB_SHA"

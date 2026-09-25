@@ -25,11 +25,14 @@ case "${1:-}" in
             enabled=$(/sbin/getcfg "$name" Enable -u -d FALSE -f "$config")
             [ "$enabled" = TRUE ] || { echo "$name is disabled" >&2; exit 1; }
         fi
-        command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required' >&2; exit 1; }
         running && exit 0
         umask 077
+        python=$(/bin/sh "$root/python3-path" 2>> "$root/selfcare.log") || {
+            echo 'Python 3.8+ not found; check selfcare.log' >&2
+            exit 1
+        }
         rm -f "$root/admin-token"
-        nohup python3 "$root/webapp.py" --lan --port 17863 > "$root/selfcare.log" 2>&1 &
+        nohup "$python" "$root/webapp.py" --lan --port 17863 > "$root/selfcare.log" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
         running || { rm -f "$pidfile"; echo 'Web UI failed to start; check selfcare.log' >&2; exit 1; }
