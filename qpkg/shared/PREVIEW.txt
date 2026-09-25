@@ -1,4 +1,4 @@
-QnapSelfCare 0.3.0
+QnapSelfCare 0.3.1
 
 Local health records, user/device settings, CSV import/export, JSON backup/restore.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
@@ -7,3 +7,8 @@ HomeHub UI stays on 8787; the shared radio uses a Unix socket, no public port.
 ESP32 is not used. Optional standalone USB setup is in bluetooth/ and scripts/.
 Hardware pairing and measurement synchronization require validation on the NAS.
 Read README.md and docs/bluetooth-homehub.md before pairing.
+
+Settings > SelfCare update: check, then apply from the Web UI.
+The NAS downloads and verifies the QPKG, backs up data, installs and verifies restart.
+Upgrading from 0.3.0 requires one initial manual App Center install.
+Update logs/backups: /share/Container/QnapSelfCare/updates/. NAS self-update needs real-device validation.

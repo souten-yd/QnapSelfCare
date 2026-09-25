@@ -1,6 +1,6 @@
 # QnapSelfCare
 
-QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理します。0.3.0は利用者・機器管理、記録の保存・編集、グラフ、CSV、バックアップとUSB Bluetooth収集を実装しています。0.2.6のWeb接続は利用者のNASで確認済みです。**今回追加したBLEペアリング・履歴同期は実機での検証が必要です。** ESP32は使用しません。
+QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理します。0.3.1はWebボタンによる自己更新に対応します。0.3.0からの利用者・機器管理、記録の保存・編集、グラフ、CSV、バックアップとUSB Bluetooth収集も利用できます。0.2.6のWeb接続は利用者のNASで確認済みです。**BLEペアリング・履歴同期は実機での検証が必要です。** ESP32は使用しません。
 
 ## 機能
 
@@ -10,7 +10,7 @@ QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測�
 - USB BLEのスキャン、明示的なペアリング、保存履歴読取、自動探索と同期。
 - SQLiteへの永続保存、測定時刻のUTC正規化と重複排除。
 - QnapSelfCare形式のCSV取込・出力、JSONバックアップ・空の保存先への復元。
-- GitHub Releaseの更新確認、SHA-256を確認したQPKG取得。適用はApp Centerから行います。
+- GitHub Releaseの更新確認と「更新する」ボタン。NASがQPKG取得・SHA-256検証・DBバックアップ・適用・再起動確認まで実行します。
 
 | サービス | 待ち受け | 役割 |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ QnapHomeHub 0.3.0のradioサービスとの共用が既定です。通常はSelf
 
 ## Web画面と起動
 
-QPKGをApp Centerでインストール・有効化し、`http://<NASのIP>:17863/` を開きます。QPKGはIPv4全インターフェースで待ち受け、接続元サブネットを限定しません。TailscaleでNASのIPv4へ到達できる場合も同じポートです。認証を設けない構成のため、到達できる人は健康記録の閲覧・編集ができます。NASのアクセス設定で利用範囲を管理してください。
+QPKGをApp Centerでインストール・有効化し、`http://<NASのIP>:17863/` を開きます。QPKGはIPv4全インターフェースで待ち受け、接続元サブネットを限定しません。TailscaleでNASのIPv4へ到達できる場合も同じポートです。認証を設けない構成のため、到達できる人は健康記録の閲覧・編集とSelfCareの更新ができます。NASのアクセス設定で利用範囲を管理してください。
 
 Python 3.8以降と既存の `/share/Container` 共有フォルダを使います。`python3-path` がPython3 QPKG、`/opt/bin/python3.11`、`/opt/bin/python3`などを探索します。特殊な場所は `SELFCARE_PYTHON` で指定できます。起動に `nohup` は不要です。Web・保存・CSV機能はPython標準ライブラリだけで動作します。共通radioを利用する場合、NAS本体へのBleakやBlueZの追加は不要です。
 
@@ -55,7 +55,29 @@ HEM-6232Tは血圧・脈拍、HBF-228Tは体重・体脂肪率・骨格筋率・
 
 自動同期は、未待機の機器があると約10秒スキャンし、検出した登録機器だけに接続します。成功・失敗にかかわらず機器ごとの同期間隔を設けます。広告停止中やスマートフォンとの接続中は収集できません。保存可能な履歴件数、電波、旧QNAPカーネルとUSBドングルの互換性は実機に依存します。
 
-## 開発・更新
+## Webからの自己更新（0.3.1以降）
+
+0.3.0以前から今回版への切替だけはApp CenterでQPKGを手動適用してください。以後は「設定・バックアップ → SelfCareの更新 → 更新を確認 → vX.Y.Zに更新する」で、ブラウザへQPKGをダウンロードせず更新できます。
+
+ボタンを押して確認すると、独立した更新ワーカーがNAS上で最新安定版を再確認し、CPUに合う公式リポジトリのQPKGを取得・SHA-256検証します。測定DBと設定をバックアップし、SelfCareを停止してQDKインストーラーを実行します。既存QPKGと同じボリュームに適用し、QPKG登録バージョンと新しいWebサービスの応答が一致してから完了と表示します。状態とログはNASに保存するので、Web再起動・画面再読み込み後も確認できます。nohupは不要です。
+
+更新確認だけではインストールしません。定期自動適用は追加していません。ボタン連打はロックで拒否し、APIでは任意のURL・コマンドを受け付けません。QNAPの管理者権限、QPKG登録先・実行中バージョンの一致、空き容量が必要です。開発用の直接起動では適用ボタンを無効にします。
+
+更新データは `/share/Container/QnapSelfCare/updates/` に置きます。
+
+| パス | 内容 |
+| --- | --- |
+| `status.json` | 最後の更新状態・対象版・結果 |
+| `<ジョブID>/update.log` | 更新・インストーラーのログ（画面では末尾を表示） |
+| `<ジョブID>/backup/` | 更新直前のSQLite DBとconfig。ペアリングキーを含む管理者用バックアップ |
+
+検証不一致・バックアップ失敗・サービス停止失敗ならQPKGを実行しません。QDKの終了コード0/10を受けた後も、登録版とWebの確認が必要です。適用の終了コードまたは起動確認が失敗した場合はエラーを保持し、有効なSelfCareの起動を試みます。インストーラーが10分経っても終了しない場合は途中で強制終了せず、実プロセスが終了するまで再実行を拒否します。ダウンロード・バックアップ・起動確認にも時間上限があります。中断後の自動再実行や、DBを巻き戻す自動ロールバックは行いません。
+
+更新失敗後にWebへ接続できない場合はApp CenterでSelfCareの状態を確認し、必要なら同じ正式QPKGを手動再適用してください。ログ・バックアップと元の永続データは残ります。バックアップは自動削除しないため、必要に応じて保管・整理してください。
+
+このボタンの対象はSelfCare QPKGです。HomeHubと共通radioはHomeHub側の更新機能で管理します。SelfCare専用BLEコンテナを使う場合は、従来どおり同梱Composeから再ビルドします。QNAP実機での自己更新は未検証で、CIではインストーラー境界を置き換えてライフサイクル・異常系を検証しています。
+
+## 開発・CLI
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -67,10 +89,10 @@ python3 webapp.py --port 17863 --data-dir /tmp/selfcare-dev
 開発起動はloopback待ち受けです。`--lan` で全IPv4インターフェースを使用します。CIはPython・DOM操作テストとQDKのx86_64 / arm_64ビルドを行います。実機BLE・NASのコンテナ起動はCIの対象外です。
 
 ```sh
-./selfcare-update check --current-version 0.3.0 --arch x86_64
-./selfcare-update download --current-version 0.3.0 --arch x86_64 --dest /path/to/private/staging
+./selfcare-update check --current-version 0.3.1 --arch x86_64
+./selfcare-update download --current-version 0.3.1 --arch x86_64 --dest /path/to/private/staging
 ```
 
-配布名は `QnapSelfCare_X.Y.Z_<arch>.qpkg` です。GitHubが返すSHA-256 digestとダウンロードを照合し、不一致・digest欠落時は取得を完了しません。
+上記CLIのdownloadは検証付き取得専用です。通常の適用にはWebの更新ボタンを使います。配布名は `QnapSelfCare_X.Y.Z_<arch>.qpkg` です。GitHubが返すSHA-256 digestとダウンロードを照合し、不一致・digest欠落時は取得を完了しません。
 
 BLEのプロトコル実装・第三者コードの出典と配布条件は [THIRD_PARTY.md](THIRD_PARTY.md) に記載しています。

@@ -47,6 +47,15 @@ class UpdaterTests(unittest.TestCase):
                     updater.stage(asset, directory)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_slow_download_is_bounded_and_never_staged(self):
+        contents = b'verified qpkg'
+        asset = updater.select({'tag_name':'v1.2.3', 'assets':[self.asset(contents)]}, '1.2.2', 'x86_64')
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(updater.urllib.request, 'urlopen', return_value=io.BytesIO(contents)), \
+                 patch.object(updater.time, 'monotonic', side_effect=[0, 301]), self.assertRaises(ValueError):
+                updater.stage(asset, directory)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

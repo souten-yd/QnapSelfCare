@@ -6,7 +6,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import webapp
 from storage import Store
@@ -19,6 +19,9 @@ class WebAppTests(unittest.TestCase):
         self.server.store = Store(self.tmp.name)
         self.server.collector = Mock()
         self.server.collector.diagnostics.return_value = {'mode': 'homehub'}
+        self.server.updates = Mock()
+        self.server.updates.status.return_value = {'phase': 'idle', 'busy': False, 'supported': True}
+        self.server.updates.apply.return_value = {'phase': 'queued', 'busy': True, 'id': 'test'}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = f'http://127.0.0.1:{self.server.server_port}'
@@ -73,6 +76,34 @@ class WebAppTests(unittest.TestCase):
         root = Path(self.tmp.name)
         (root / 'hci1').mkdir(); (root / 'hci0').mkdir()
         self.assertEqual(webapp.bluetooth_adapters(root), ['hci0', 'hci1'])
+
+    def test_update_status_and_check_do_not_install(self):
+        with self.request('/api/update/status') as response:
+            self.assertEqual(json.load(response)['phase'], 'idle')
+        with patch.object(webapp.updater, 'latest', return_value={'version': 'v0.3.2', 'url': 'release'}):
+            with self.request('/api/update') as response:
+                self.assertTrue(json.load(response)['available'])
+        self.server.updates.apply.assert_not_called()
+        with self.request('/update.js') as response:
+            self.assertIn('api/update/apply', response.read().decode())
+
+    def test_update_apply_accepts_only_selected_version_with_header(self):
+        for body, header, status in (({'version':'v0.3.2'}, False, 403),
+                                     ({'version':'v0.3.2','url':'https://evil.example/x'}, True, 400)):
+            with self.assertRaises(HTTPError) as error:
+                self.request('/api/update/apply', body, header=header)
+            self.assertEqual(error.exception.code, status)
+        self.server.updates.apply.assert_not_called()
+        with self.request('/api/update/apply', {'version':'v0.3.2'}) as response:
+            self.assertEqual(response.status, 202)
+            self.assertEqual(json.load(response)['phase'], 'queued')
+        self.server.updates.apply.assert_called_once_with('v0.3.2')
+
+    def test_busy_update_returns_conflict(self):
+        self.server.updates.apply.side_effect = webapp.UpdateConflict('busy')
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/update/apply', {'version':'v0.3.2'})
+        self.assertEqual(error.exception.code, 409)
 
 if __name__ == '__main__':
     unittest.main()
