@@ -94,6 +94,21 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent==='活動記録を保存しました');
  assert.match(d.getElementById('activity-list').textContent,/-400 kcal/);
  assert(d.querySelector('#energy-chart svg'));
+ const energyUrl='/api/wellness/energy?user_id='+d.getElementById('current-user').value;
+ let energyState=await (await fetch(base+energyUrl)).json();
+ assert.equal(energyState.routine.intake_kcal,2100);
+ activity.elements.reuse.value='once';activity.elements.intake_kcal.value='2300';submit('activity-form');
+ await until(async()=>((await (await fetch(base+energyUrl)).json()).current.intake_kcal===2300));
+ assert.equal((await (await fetch(base+energyUrl)).json()).routine.intake_kcal,2100);
+ await until(()=>d.getElementById('energy-today').textContent.includes('2300'));
+ d.getElementById('activity-previous').click();
+ assert.equal(activity.elements.intake_kcal.value,'2300');
+ d.getElementById('routine-stop').click();
+ await until(()=>d.getElementById('routine-stop').hidden);
+ energyState=await (await fetch(base+energyUrl)).json();
+ assert.equal(energyState.routine,null);
+ assert.equal(energyState.current.intake_kcal,2300);
+
  const plan=d.getElementById('weight-plan-form');plan.elements.start_date.value='2026-09-25';plan.elements.start_weight.value='81';plan.elements.goal_weight.value='76';plan.elements.goal_date.value='2027-03-01';submit('weight-plan-form');
  await until(()=>d.getElementById('message').textContent==='減量計画と見直し履歴を保存しました');
  assert.match(d.getElementById('weekly-review').textContent,/目標まで 5 kg/);

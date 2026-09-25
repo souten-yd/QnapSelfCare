@@ -115,7 +115,9 @@ class Coach:
                    'saved_plan': profile['plan_text'][:3000], 'recent_meals': recent_meals}
         activity = self.store.energy_report(user_id)
         context['energy'] = activity['current']
-        context['recent_activity'] = activity['diaries'][-7:]
+        context['recent_activity'] = activity['entries'][-7:]
+        context['usual_activity'] = activity['routine']
+        context['activity_source_note'] = 'source=routineはいつもの設定による仮定、enteredはその日の入力。仮定を実績と断定しない。'
         context['weekly_review'] = [w for w in activity['weeks'] if not w['future']][-4:]
         context['energy_notices'] = activity['notices']
         context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)

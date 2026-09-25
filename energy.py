@@ -63,7 +63,7 @@ def bmr(profile, weight):
     return round(10 * weight + 6.25 * profile['height_cm'] - 5 * profile['age'] + (5 if profile['sex'] == 'male' else -161))
 
 
-def report(profile, records, diaries, plans, current=None):
+def report(profile, records, diaries, plans, current=None, routines=()):
     current = current or today()
     grouped = {}
     for r in records:
@@ -73,14 +73,29 @@ def report(profile, records, diaries, plans, current=None):
                 grouped.setdefault(d, []).append(r['values']['weight'])
     weights = {d: round(mean(v), 2) for d, v in sorted(grouped.items())}
     active = plans[-1] if plans else None
-    days = {x['date']: x for x in diaries}
+    days = {x['date']: dict(x, source='entered') for x in diaries}
+    # Defaults are dated assumptions, never inserted as measured daily records.
+    routine_days = {}
+    ordered = sorted(routines, key=lambda r: (r['effective_date'], r.get('id', 0)))
+    routine = None
+    if ordered:
+        cursor, index = day(ordered[0]['effective_date']), 0
+        while cursor <= current:
+            key = cursor.isoformat()
+            while index < len(ordered) and ordered[index]['effective_date'] <= key:
+                routine = ordered[index]['entry']
+                index += 1
+            if routine is not None:
+                routine_days[key] = dict(routine, date=key, source='routine')
+            cursor += timedelta(days=1)
+    effective = dict(routine_days, **days)
     history = []
     last_weight, last_date = None, None
     # Never use future measurements to fill an earlier activity entry.
-    for d in sorted(set(weights) | set(days)):
+    for d in sorted(set(weights) | set(effective)):
         if d in weights:
             last_weight, last_date = weights[d], d
-        entry = days.get(d, {})
+        entry = effective.get(d, {})
         applicable = next((p for p in reversed(plans) if p['start_date'] <= d), None)
         pal = entry.get('pal', applicable['pal'] if applicable else 1.5)
         basal = bmr(profile, last_weight)
@@ -94,7 +109,8 @@ def report(profile, records, diaries, plans, current=None):
                 candidate = round(total - applicable['deficit_kcal'])
                 target = candidate if candidate >= max(1200, basal or 1200) else None
         history.append({'date': d, 'weight': weights.get(d), 'weight_used': last_weight, 'weight_date': last_date,
-                        'bmr': basal, 'total_kcal': total, 'total_source': '入力' if entry.get('total_kcal') is not None else '推定',
+                        'bmr': basal, 'total_kcal': total, 'source': entry.get('source', 'estimate'),
+                        'total_source': ('いつもの設定' if entry.get('source') == 'routine' else '入力') if entry.get('total_kcal') is not None else '推定',
                         'intake_kcal': entry.get('intake_kcal'), 'target_kcal': target,
                         'balance_kcal': round(entry['intake_kcal'] - total) if entry.get('intake_kcal') is not None and total is not None else None})
     weeks, projection, notices = [], [], []
@@ -142,7 +158,7 @@ def report(profile, records, diaries, plans, current=None):
             notices.append('計画の目標日を過ぎています。新しい計画を保存して見直せます。')
     latest_weight = next(reversed(weights.values()), None) if weights else None
     basal = bmr(profile, latest_weight)
-    entry = days.get(current.isoformat(), {})
+    entry = effective.get(current.isoformat(), {})
     pal = entry.get('pal', active['pal'] if active else 1.5)
     total = entry.get('total_kcal')
     if total is None and basal is not None:
@@ -159,6 +175,8 @@ def report(profile, records, diaries, plans, current=None):
     if target is not None and basal is not None and target < basal:
         notices.append('入力した摂取目標は推定基礎代謝を下回っています。専門家と相談して目標を確認してください。')
     return {'today': current.isoformat(), 'current': {'bmr': basal, 'total_kcal': total, 'target_kcal': target,
-            'weight_date': next(reversed(weights), None) if weights else None, 'pal': pal},
+            'weight_date': next(reversed(weights), None) if weights else None, 'pal': pal,
+            'intake_kcal': entry.get('intake_kcal'), 'source': entry.get('source', 'estimate')},
             'history': history, 'weeks': weeks, 'projection': projection, 'notices': notices,
-            'diaries': diaries, 'plans': plans, 'active_plan': active}
+            'diaries': diaries, 'entries': [effective[d] for d in sorted(effective)], 'routine': routine,
+            'routines': routines, 'plans': plans, 'active_plan': active}

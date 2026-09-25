@@ -45,7 +45,7 @@ class ProtectionTests(unittest.TestCase):
             'adapter': 'hci0', 'bindings': {'1': 'person'}, 'transport': 'homehub', 'auto_sync': True,
             'interval': 300, 'utc_offset_minutes': 540})
         self.store.pairing_key(device['address'], 'f' * 32)
-        self.store.save_activity('person', {'date': '2026-08-01', 'pal': 1.5, 'steps': 8000})
+        self.store.save_activity('person', {'date': '2026-08-01', 'pal': 1.5, 'steps': 8000}, reuse=True)
         self.store.save_weight_plan('person', {'start_date': '2026-08-01', 'start_weight': 80,
             'goal_date': '2027-03-01', 'goal_weight': 75, 'reason': '初回'})
         record_id = self.store.records()['records'][0]['id']
@@ -75,6 +75,7 @@ class ProtectionTests(unittest.TestCase):
         protection.restore(self.root, archive)
         restored = self.reopen()
         self.assertEqual(restored.energy_report('person')['diaries'][0]['steps'], 8000)
+        self.assertEqual(restored.energy_report('person')['routine']['steps'], 8000)
         self.assertEqual(restored.energy_report('person')['active_plan']['goal_weight'], 75)
         self.assertFalse(restored.devices()[0]['auto_sync'])
         self.assertEqual(restored.add_records([self.record])['inserted'], 0)

@@ -143,6 +143,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS activity_days(
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     day TEXT NOT NULL, config TEXT NOT NULL, PRIMARY KEY(user_id,day));
+                CREATE TABLE IF NOT EXISTS activity_routines(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    effective_date TEXT NOT NULL, created_at TEXT NOT NULL, config TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS weight_plans(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -265,15 +269,35 @@ class Store:
                 'SELECT config FROM activity_days WHERE user_id=? ORDER BY day', (user_id,))]
             plans = [dict(json.loads(r['config']), id=r['id'], created_at=r['created_at']) for r in db.execute(
                 'SELECT * FROM weight_plans WHERE user_id=? ORDER BY id', (user_id,))]
-        return energy.report(profile, records, diaries, plans)
+            routines = [dict(id=r['id'], effective_date=r['effective_date'], created_at=r['created_at'], entry=json.loads(r['config']))
+                        for r in db.execute('SELECT * FROM activity_routines WHERE user_id=? ORDER BY effective_date,id', (user_id,))]
+        return energy.report(profile, records, diaries, plans, routines=routines)
 
-    def save_activity(self, user_id, payload):
+    def save_activity(self, user_id, payload, reuse=False):
         self.wellness_profile(user_id)
         value = energy.diary(payload)
+        if not isinstance(reuse, bool):
+            raise ValueError('使い回しの指定が不正です')
         with self.connect() as db:
             db.execute('INSERT INTO activity_days VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET config=excluded.config',
                        (user_id, value['date'], json.dumps(value, ensure_ascii=False)))
+            if reuse:
+                self._save_routine(db, user_id, value)
         return value
+
+    def _save_routine(self, db, user_id, value):
+        entry = {k: v for k, v in value.items() if k != 'date'} if value is not None else None
+        db.execute('INSERT INTO activity_routines(user_id,effective_date,created_at,config) VALUES(?,?,?,?)',
+                   (user_id, energy.today().isoformat(), now(), json.dumps(entry, ensure_ascii=False)))
+
+    def save_activity_routine(self, user_id, payload):
+        self.wellness_profile(user_id)
+        if payload is not None and not isinstance(payload, dict):
+            raise ValueError('いつもの設定が不正です')
+        value = energy.diary(dict(payload, date=energy.today().isoformat())) if payload is not None else None
+        with self.connect() as db:
+            self._save_routine(db, user_id, value)
+        return {'saved': True}
 
     def delete_activity(self, user_id, day):
         self.wellness_profile(user_id)
@@ -596,6 +620,7 @@ class Store:
                     "automatic_sync_days": [dict(r) for r in db.execute('SELECT * FROM automatic_sync_days')],
                     "wellness_profiles": [dict(json.loads(r['config']), user_id=r['user_id'])
                                           for r in db.execute('SELECT * FROM wellness_profiles')],
+                    "activity_routines": [dict(user_id=r['user_id'], effective_date=r['effective_date'], created_at=r['created_at'], entry=json.loads(r['config'])) for r in db.execute('SELECT * FROM activity_routines ORDER BY id')],
                     "activity_days": [dict(json.loads(r['config']), user_id=r['user_id']) for r in db.execute('SELECT * FROM activity_days')],
                     "weight_plans": [dict(json.loads(r['config']), user_id=r['user_id'], created_at=r['created_at']) for r in db.execute('SELECT * FROM weight_plans ORDER BY id')],
                     "meal_notes": [dict(r) for r in db.execute('SELECT * FROM meal_notes')],
@@ -659,6 +684,23 @@ class Store:
                 calories = wellness.number(item.get('calories'), 0, 10000, '目安カロリー', True)
                 db.execute('INSERT INTO meal_notes VALUES(?,?,?,?,?)',
                            (mid, item['user_id'], timestamp(item.get('created_at')), meal, calories))
+            routines = backup.get('activity_routines', [])
+            if not isinstance(routines, list) or len(routines) > 100000:
+                raise ValueError('いつもの設定の履歴が不正です')
+            for item in routines:
+                if not isinstance(item, dict) or set(item) != {'user_id', 'effective_date', 'created_at', 'entry'} or item['user_id'] not in user_ids:
+                    raise ValueError('いつもの設定の利用者または項目が不正です')
+                effective = energy.day(item['effective_date']).isoformat()
+                if effective > energy.today().isoformat():
+                    raise ValueError('いつもの設定の適用日が未来です')
+                entry = item['entry']
+                if entry is not None:
+                    if not isinstance(entry, dict) or 'date' in entry:
+                        raise ValueError('いつもの設定が不正です')
+                    entry = energy.diary(dict(entry, date=effective))
+                    entry.pop('date')
+                db.execute('INSERT INTO activity_routines(user_id,effective_date,created_at,config) VALUES(?,?,?,?)',
+                           (item['user_id'], effective, timestamp(item['created_at']), json.dumps(entry, ensure_ascii=False)))
             for table, validator in [('activity_days', energy.diary), ('weight_plans', energy.plan)]:
                 items = backup.get(table, [])
                 if not isinstance(items, list) or len(items) > 100000:
