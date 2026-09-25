@@ -169,6 +169,42 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(store.records()['total'], 1)
             self.assertEqual(store.jobs()[0]['state'], 'done')
 
+    def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            user = store.save_user({'name': 'test'})
+            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 100})
+            store.pairing_key(device['address'], '11' * 16)
+            runner = Mock(return_value={'devices': []})
+            manager = CollectorManager(store, runner=runner)
+            with patch('collectors.time.monotonic', return_value=100):
+                manager.schedule()
+            self.assertEqual(store.jobs()[0]['state'], 'skipped')
+            self.assertIsNotNone(store.jobs()[0]['finished_at'])
+            self.assertTrue(manager.queue.empty())
+            with patch('collectors.time.monotonic', return_value=199):
+                manager.schedule()
+            self.assertEqual(runner.call_count, 1)
+            runner.return_value = {'devices': [{'address': device['address']}]}
+            with patch('collectors.time.monotonic', return_value=200):
+                manager.schedule()
+            runner.side_effect = BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください')
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(store.jobs()[0]['state'], 'skipped')
+            manager.submit('sync', device['id'])
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(store.jobs()[0]['state'], 'failed')
+            runner.side_effect = BluetoothFailure('read timeout')
+            manager.submit('sync', device['id'], automatic=True)
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(store.jobs()[0]['state'], 'failed')
+            manager.next_attempt.clear()
+            manager.next_scan = 0
+            runner.side_effect = BluetoothFailure('radio unavailable')
+            manager.schedule()
+            self.assertEqual(manager.watch_error, 'radio unavailable')
+
     def test_direct_access_requires_exclusive_adapter(self):
         with tempfile.TemporaryDirectory() as root:
             manager = CollectorManager(Store(root))

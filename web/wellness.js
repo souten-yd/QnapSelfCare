@@ -3,10 +3,10 @@ const WELLNESS_FIELDS=['height_cm','age','sex','goal_weight_kg','goal_date','bp_
 async function refreshWellness(){
  const userId=$('current-user').value;
  $('wellness-empty').hidden=!!userId;$('wellness-content').hidden=!userId;
- if(!userId){wellnessProfile=null;renderCharts();return;}
+ if(!userId){wellnessProfile=null;wellnessProfileUser=null;renderBmi();renderCharts();return;}
  const [summary,meals]=await Promise.all([api('/api/wellness/summary?user_id='+encodeURIComponent(userId)),api('/api/wellness/meals?user_id='+encodeURIComponent(userId))]);
  if(userId!==$('current-user').value)return;
- wellnessProfile=summary.profile;const form=$('wellness-form');
+ wellnessProfile=summary.profile;wellnessProfileUser=userId;renderBmi();const form=$('wellness-form');
  for(const key of WELLNESS_FIELDS)form.elements[key].value=summary.profile[key]??'';
  renderCharts();
  const rows={'現在の体重':summary.latest_weight==null?'—':summary.latest_weight+' kg',

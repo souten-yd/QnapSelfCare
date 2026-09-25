@@ -110,7 +110,7 @@ class CollectorManager:
                 process.terminate()
         self.thread.join(timeout=3)
 
-    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False):
+    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False, automatic=False):
         self.store.require_available()
         if not isinstance(diagnostic, bool) or (diagnostic and action not in ('pair', 'sync')):
             raise ValueError('詳細診断は手動のペアリング・履歴同期でのみ使用できます')
@@ -140,11 +140,11 @@ class CollectorManager:
                 raise ValueError("同じ機器の処理が実行中、または待機中です")
             identifier = self.store.create_job(device_id, action)
             self.pending.add(pending_key)
-            self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport, diagnostic))
+            self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport, diagnostic, automatic))
         return {"id": identifier, "state": "queued"}
 
     def process(self, item):
-        identifier, pending_key, action, device, adapter, transport, diagnostic = item
+        identifier, pending_key, action, device, adapter, transport, diagnostic, automatic = item
         self.store.update_job(identifier, "running", "Bluetooth処理を実行しています")
         trace = None
         try:
@@ -193,7 +193,10 @@ class CollectorManager:
                     trace = {'stage': str(trace.get('stage', 'unknown'))[:40], 'truncated': True}
             else:
                 trace = None
-            self.store.update_job(identifier, "failed", str(error) or type(error).__name__,
+            missing = str(error) == "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
+            skipped = automatic and action == "sync" and missing
+            self.store.update_job(identifier, "skipped" if skipped else "failed",
+                                  "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__,
                                   {'diagnostic': trace} if trace else None)
         finally:
             with self.lock:
@@ -215,22 +218,33 @@ class CollectorManager:
             return
         transport, adapter = groups[self.scan_group % len(groups)]
         self.scan_group += 1
+        group = [d for d in eligible if (d["transport"], d["adapter"]) == (transport, adapter)]
+        # Even absent devices must wait for their configured interval, not scan every 2s.
         try:
             result = self.runner({"action": "scan", "adapter": adapter, "transport": transport}, self.store.directory)
+            if result.get("error"):
+                raise ValueError(result["error"])
             addresses = {d["address"].upper() for d in result.get("devices", [])}
             self.watch_error = None
-            for device in eligible:
-                if (device["transport"], device["adapter"]) != (transport, adapter) or device["address"] not in addresses:
-                    continue
+            for device in group:
                 try:
-                    self.submit("sync", device["id"])
+                    if device["address"] in addresses:
+                        self.submit("sync", device["id"], automatic=True)
+                    else:
+                        with self.lock:
+                            if device["id"] in self.pending:
+                                continue
+                            job = self.store.create_job(device["id"], "sync")
+                        self.store.update_job(job, "skipped", "検索で機器が見つからないためスキップしました。次の同期周期に再確認します")
                 except ValueError:
+                    # A concurrent manual request or registration removal takes precedence.
                     pass
-                self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
         except Exception as error:
             self.watch_error = str(error) or type(error).__name__
         finally:
-            self.next_scan = time.monotonic() + (30 if self.watch_error else 2)
+            for device in group:
+                self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
+            self.next_scan = time.monotonic() + 2
 
     def loop(self):
         while not self.stop_event.is_set():

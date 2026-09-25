@@ -26,6 +26,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent.includes('1件保存'));
  await until(()=>d.getElementById('history').textContent.includes('最高血圧 130'));
  assert.match(d.getElementById('latest-bp').textContent,/130 \/ 80/);
+ d.getElementById('history').querySelector('.record-controls').open=true;
  d.getElementById('history').querySelector('button').click();form.elements.pulse.value='74';submit('record-form');
  await until(()=>d.getElementById('message').textContent==='記録を更新しました');
  await until(()=>d.getElementById('history').textContent.includes('脈拍 74'));
@@ -71,5 +72,13 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent.includes('過去データを反映しました'));
  const imported=(await (await fetch(base+'/api/records')).json()).records.find(r=>r.kind==='body_composition');
  assert.equal(imported.values.weight,106.6);
+ await until(()=>d.getElementById('latest-bmi').textContent==='31.5');
+ await w.fetch('/api/records',{method:'POST',headers:{'Content-Type':'application/json','X-SelfCare-Request':'1'},body:JSON.stringify({user_id:d.getElementById('current-user').value,kind:'body_composition',measured_at:'2026-09-25T10:00:00Z',values:{weight:81}})});
+ d.getElementById('apply-filter').click();
+ await until(()=>d.getElementById('latest-bmi').textContent==='25.0');
+ assert.match(d.getElementById('bmi-date').textContent,/身長から算出/);
+ d.getElementById('current-user').value='';
+ d.getElementById('apply-filter').click();
+ await until(()=>d.getElementById('latest-bmi').textContent==='—');
  console.log('UI records, discovery-based registration and OMRON history transfer: passed');
 }finally{dom?.window.close();child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));fs.rmSync(data,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
