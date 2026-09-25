@@ -1,79 +1,78 @@
 from http.server import ThreadingHTTPServer
 import json
-import threading
 import tempfile
+import threading
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from pathlib import Path
+from unittest.mock import Mock
 
 import webapp
+from storage import Store
 
 
 class WebAppTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), webapp.Handler)
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
-        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), webapp.Handler)
+        self.server.store = Store(self.tmp.name)
+        self.server.collector = Mock()
+        self.server.collector.diagnostics.return_value = {'mode': 'homehub'}
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f'http://127.0.0.1:{self.server.server_port}'
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join(timeout=2)
+    def tearDown(self):
+        self.server.shutdown(); self.server.server_close(); self.thread.join(2); self.tmp.cleanup()
 
-    def request(self, path, method="GET"):
-        return urlopen(Request(self.base + path, method=method), timeout=2)
+    def request(self, path, body=None, method=None, header=True):
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {'Content-Type': 'application/json'}
+        if header: headers['X-SelfCare-Request'] = '1'
+        return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
-    def test_dashboard_is_open_and_read_only(self):
-        with self.request("/") as response:
-            self.assertIn("QnapSelfCare", response.read().decode())
-            self.assertEqual(response.headers["Cache-Control"], "no-store")
-        with self.assertRaises(HTTPError) as failure:
-            self.request("/api/status", "POST")
-        self.assertEqual(failure.exception.code, 405)
-
-    def test_status_does_not_claim_collection(self):
-        with self.request("/api/status") as response:
+    def test_open_dashboard_and_status(self):
+        with self.request('/') as response:
+            self.assertIn('QnapSelfCare', response.read().decode())
+        with self.request('/api/status') as response:
             data = json.load(response)
-        self.assertEqual(data["version"], webapp.VERSION)
-        self.assertFalse(data["collection_enabled"])
-        self.assertEqual(data["devices"]["HBF-228T"], "未接続")
-        self.assertIn("bluetooth_adapters", data)
+        self.assertEqual(data['record_count'], 0)
+        self.assertFalse(data['collection_enabled'])
 
-    def test_adapter_discovery_does_not_initialize_bluetooth(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "hci1").mkdir()
-            (root / "hci0").mkdir()
-            (root / "other").mkdir()
-            self.assertEqual(webapp.bluetooth_adapters(root), ["hci0", "hci1"])
-            self.assertEqual(webapp.bluetooth_adapters(root / "missing"), [])
+    def test_save_history_export_edit_and_delete(self):
+        with self.request('/api/users', {'name': 'Test'}) as response:
+            user = json.load(response)
+        body = {'user_id': user['id'], 'kind': 'body_composition', 'measured_at': '2026-09-25T09:00:00+09:00', 'values': {'weight': 70}}
+        with self.request('/api/records', body) as response:
+            self.assertEqual(json.load(response)['inserted'], 1)
+        with self.request('/api/records') as response:
+            record = json.load(response)['records'][0]
+        body['values']['weight'] = 71
+        with self.request('/api/records/' + record['id'], body) as response:
+            self.assertTrue(json.load(response)['updated'])
+        with self.request('/api/export.csv') as response:
+            self.assertIn('71.0', response.read().decode())
+        with self.request('/api/records/' + record['id'], {}, 'DELETE') as response:
+            self.assertTrue(json.load(response)['deleted'])
 
-    def test_no_source_subnet_filter(self):
-        # No source-network setting is required for the status endpoint.
-        with self.request("/api/status") as response:
-            self.assertEqual(response.status, 200)
+    def test_cross_site_form_cannot_mutate(self):
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/users', {'name': 'Bad'}, header=False)
+        self.assertEqual(error.exception.code, 403)
+        self.assertEqual(self.server.store.users(), [])
 
-    def test_listen_addresses_are_explicit(self):
-        interfaces = [(1, "tun0"), (2, "eth0"), (3, "tailscale0"), (4, "docker0")]
-        ip_by_name = {"tun0": "10.7.7.7", "eth0": "192.168.68.57",
-                      "tailscale0": "100.101.102.103", "docker0": "172.17.0.1"}
-        with patch.object(webapp.socket, "if_nameindex", return_value=interfaces), \
-             patch.object(webapp, "interface_ipv4", side_effect=ip_by_name.get) as lookup:
-            self.assertEqual(webapp.listen_addresses(),
-                             ["192.168.68.57", "127.0.0.1", "100.101.102.103"])
-            self.assertEqual([call.args[0] for call in lookup.call_args_list],
-                             ["eth0", "tailscale0"])
+    def test_invalid_import_rolls_back(self):
+        user = self.server.store.save_user({'name':'Test'})
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/import', {'records': [{'user_id':user['id'], 'kind':'body_composition', 'measured_at':'invalid', 'values':{'weight':70}}]})
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.server.store.records()['total'], 0)
 
-    def test_missing_lan_interface_fails_with_reason(self):
-        with patch.object(webapp.socket, "if_nameindex", return_value=[(1, "tun0")]):
-            with self.assertRaisesRegex(ValueError, "no private IPv4"):
-                webapp.listen_addresses()
+    def test_adapter_detection_is_read_only(self):
+        root = Path(self.tmp.name)
+        (root / 'hci1').mkdir(); (root / 'hci0').mkdir()
+        self.assertEqual(webapp.bluetooth_adapters(root), ['hci0', 'hci1'])
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

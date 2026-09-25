@@ -30,13 +30,13 @@ case "${1:-}" in
         running && exit 0
         umask 077
         [ -d "$(dirname "$data_dir")" ] || { echo 'Container share is missing' >&2; exit 1; }
-        mkdir -p "$data_dir/logs"
+        mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
         python=$(/bin/sh "$root/python3-path" 2>> "$logfile") || {
             echo "Python 3.8+ not found; check $logfile" >&2
             exit 1
         }
         rm -f "$root/admin-token"
-        "$python" "$root/webapp.py" --lan --port 17863 < /dev/null > "$logfile" 2>&1 &
+        "$python" "$root/webapp.py" --lan --port 17863 --data-dir "$data_dir" < /dev/null > "$logfile" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
         running || { rm -f "$pidfile"; echo "Web UI failed to start; check $logfile" >&2; exit 1; }

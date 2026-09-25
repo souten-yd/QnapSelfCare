@@ -1,0 +1,246 @@
+"""Serialized, bounded Bluetooth jobs and optional automatic synchronization."""
+import http.client
+import importlib.util
+import json
+import os
+from pathlib import Path
+import queue
+import secrets
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+from storage import now
+
+ROOT = Path(__file__).resolve().parent
+HOMEHUB_SOCKET = Path(os.environ.get("SELFCARE_HOMEHUB_SOCKET", "/share/Container/QnapHomeHub/data/radio/ble.sock"))
+ACTIVE_WORKERS = set()
+WORKER_LOCK = threading.Lock()
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, path, timeout=320):
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = str(path)
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def bridge_request(path, payload=None):
+    connection = UnixHTTPConnection(path, timeout=320 if payload else 3)
+    try:
+        body = json.dumps(payload).encode() if payload else None
+        connection.request("POST" if payload else "GET", "/run" if payload else "/health", body,
+                           {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        data = json.loads(response.read(4 * 1024 * 1024))
+        if response.status != 200:
+            raise ValueError(data.get("error", "Bluetoothブリッジに接続できません"))
+        return data
+    finally:
+        connection.close()
+
+
+def run_worker(request, directory):
+    if request.get("transport", "homehub") == "homehub":
+        if not HOMEHUB_SOCKET.exists():
+            raise ValueError("共通Bluetoothサービスが未起動です。QnapHomeHubのradioサービスを起動してください")
+        return bridge_request(HOMEHUB_SOCKET, request)
+    bridge = Path(directory).parent / "run/ble.sock"
+    if bridge.exists():
+        return bridge_request(bridge, request)
+    env = dict(os.environ)
+    vendor = str(Path(directory).parent / "python")
+    env["PYTHONPATH"] = vendor + os.pathsep + env.get("PYTHONPATH", "")
+    env["SELFCARE_BLE_LOCK"] = str(Path(directory).parent / "ble.lock")
+    process = subprocess.Popen([sys.executable, str(ROOT / "ble_worker.py")], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    with WORKER_LOCK:
+        ACTIVE_WORKERS.add(process)
+    try:
+        stdout, _ = process.communicate(json.dumps(request), timeout=190)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        with WORKER_LOCK:
+            ACTIVE_WORKERS.discard(process)
+    try:
+        response = json.loads(stdout)
+    except json.JSONDecodeError:
+        raise ValueError("Bluetooth処理が終了しました。Python/BlueZの導入状態を確認してください") from None
+    if process.returncode or response.get("error"):
+        raise ValueError(response.get("error", "Bluetooth処理に失敗しました"))
+    return response
+
+
+class CollectorManager:
+    def __init__(self, store, runner=run_worker):
+        self.store = store
+        self.runner = runner
+        self.queue = queue.Queue(maxsize=8)
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.pending = set()
+        self.next_attempt = {}
+        self.next_scan = 0
+        self.scan_group = 0
+        self.watch_error = None
+        self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
+
+    def start(self):
+        self.thread.start()
+
+    def close(self):
+        self.stop_event.set()
+        with WORKER_LOCK:
+            for process in ACTIVE_WORKERS:
+                process.terminate()
+        self.thread.join(timeout=3)
+
+    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub"):
+        if action not in ("scan", "pair", "sync"):
+            raise ValueError("対応していない操作です")
+        device = self.store.device(device_id) if device_id else None
+        if action != "scan":
+            if device is None:
+                raise ValueError("機器が登録されていません")
+            if not device["address"]:
+                raise ValueError("Bluetoothアドレスを登録してください")
+            if action == "sync" and not device["bindings"]:
+                raise ValueError("機器内の利用者番号を利用者に割り当ててください")
+            if action == "sync" and not device["paired"]:
+                raise ValueError("先にペアリングしてください")
+            adapter, exclusive, transport = device["adapter"], device["exclusive"], device["transport"]
+        import re
+        if not re.fullmatch(r"hci\d{1,2}", adapter):
+            raise ValueError("Bluetoothアダプターの指定が不正です")
+        if transport not in ("homehub", "direct"):
+            raise ValueError("Bluetooth接続方式が不正です")
+        if transport == "direct" and exclusive is not True:
+            raise ValueError("選択したドングルを他のサービスが使用していないことを確認してください")
+        pending_key = device_id or "scan"
+        with self.lock:
+            if pending_key in self.pending or self.queue.full():
+                raise ValueError("同じ機器の処理が実行中、または待機中です")
+            identifier = self.store.create_job(device_id, action)
+            self.pending.add(pending_key)
+            self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport))
+        return {"id": identifier, "state": "queued"}
+
+    def process(self, item):
+        identifier, pending_key, action, device, adapter, transport = item
+        self.store.update_job(identifier, "running", "Bluetooth処理を実行しています")
+        try:
+            request = {"action": action, "device": device, "adapter": adapter, "transport": transport}
+            if action == "pair":
+                # Preserve an attempted key separately until programming succeeds.
+                key_path = self.store.directory.parent / "config" / ("pair-" + device["id"] + ".json")
+                key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                pending = json.loads(key_path.read_text()) if key_path.exists() else {}
+                key = pending.get("key") if pending.get("address") == device["address"] else None
+                if not key:
+                    key = secrets.token_hex(16)
+                    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as output:
+                        json.dump({"address": device["address"], "key": key}, output)
+                        output.flush()
+                        os.fsync(output.fileno())
+                request["key"] = key
+            elif action == "sync":
+                request["key"] = self.store.pairing_key(device["address"])
+            result = self.runner(request, self.store.directory)
+            if result.get("error"):
+                raise ValueError(result["error"])
+            if action == "pair":
+                if not result.get("paired"):
+                    raise ValueError("機器がペアリング完了を返しませんでした")
+                self.store.pairing_key(device["address"], request["key"])
+                key_path.unlink(missing_ok=True)
+                message = "ペアリングが完了しました。履歴を同期できます"
+            elif action == "sync":
+                records = result.get("records", [])
+                saved = self.store.add_records(records, "bluetooth") if records else {"inserted": 0, "duplicates": 0}
+                invalid = result.get("invalid_records", 0)
+                result = dict(saved, invalid_records=invalid)
+                message = f"{saved['inserted']}件追加・{saved['duplicates']}件重複・{invalid}件日時不正"
+            else:
+                message = f"{len(result.get('devices', []))}台検出しました"
+            self.store.update_job(identifier, "done", message, result)
+        except Exception as error:
+            self.store.update_job(identifier, "failed", str(error) or type(error).__name__)
+        finally:
+            with self.lock:
+                self.pending.discard(pending_key)
+            if device:
+                self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
+
+    def schedule(self):
+        if time.monotonic() < self.next_scan:
+            return
+        eligible = []
+        for device in self.store.devices():
+            if not (device["auto_sync"] and device["paired"] and device["bindings"] and (device["transport"] == "homehub" or device["exclusive"])):
+                continue
+            if time.monotonic() >= self.next_attempt.get(device["id"], 0):
+                eligible.append(device)
+        groups = sorted({(d["transport"], d["adapter"]) for d in eligible})
+        if not groups:
+            return
+        transport, adapter = groups[self.scan_group % len(groups)]
+        self.scan_group += 1
+        try:
+            result = self.runner({"action": "scan", "adapter": adapter, "transport": transport}, self.store.directory)
+            addresses = {d["address"].upper() for d in result.get("devices", [])}
+            self.watch_error = None
+            for device in eligible:
+                if (device["transport"], device["adapter"]) != (transport, adapter) or device["address"] not in addresses:
+                    continue
+                try:
+                    self.submit("sync", device["id"])
+                except ValueError:
+                    pass
+                self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
+        except Exception as error:
+            self.watch_error = str(error) or type(error).__name__
+        finally:
+            self.next_scan = time.monotonic() + (30 if self.watch_error else 2)
+
+    def loop(self):
+        while not self.stop_event.is_set():
+            try:
+                item = self.queue.get(timeout=2)
+            except queue.Empty:
+                try:
+                    self.schedule()
+                except Exception:
+                    # A transient DB error must not permanently stop the worker.
+                    self.stop_event.wait(5)
+                continue
+            self.process(item)
+            self.queue.task_done()
+
+    def diagnostics(self):
+        root = self.store.directory.parent
+        bridge = root / "run/ble.sock"
+        status = {"mode": "native", "bridge": False,
+                  "dbus": Path("/run/dbus/system_bus_socket").exists(),
+                  "bleak": bool(importlib.util.find_spec("bleak")) or (root / "python/bleak").is_dir(),
+                  "worker_alive": self.thread.is_alive(), "data_path": str(self.store.path),
+                  "watch_error": self.watch_error,
+                  "hardware_verified": False}
+        if HOMEHUB_SOCKET.exists():
+            bridge = HOMEHUB_SOCKET
+        if bridge.exists():
+            try:
+                status.update(bridge_request(bridge))
+                status["mode"] = "homehub" if bridge == HOMEHUB_SOCKET else "container"
+                status["bridge"] = True
+            except (OSError, ValueError, http.client.HTTPException) as error:
+                status["bridge_error"] = str(error)
+        return status

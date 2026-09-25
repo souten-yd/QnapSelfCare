@@ -1,70 +1,76 @@
 # QnapSelfCare
 
-QNAP上でOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理するためのQPKG設計です。0.2.6は**認証不要のWeb管理画面と更新確認機能のプレビュー**です。測定データの自動収集とNAS実機動作は未検証です。
+QNAPでOMRON HEM-6232T（血圧計）とHBF-228T（体重体組成計）の測定履歴を管理します。0.3.0は利用者・機器管理、記録の保存・編集、グラフ、CSV、バックアップとUSB Bluetooth収集を実装しています。0.2.6のWeb接続は利用者のNASで確認済みです。**今回追加したBLEペアリング・履歴同期は実機での検証が必要です。** ESP32は使用しません。
 
-## 構成と段階
+## 機能
 
-| 機能 | 設計 | 現状 |
+- 利用者別の血圧・脈拍・体重・体組成履歴、期間フィルター、グラフ。
+- 手入力・修正・削除。削除・修正済みの元記録はBluetoothで再取得しても復活させません。
+- HEM-6232Tの2人分・HBF-228Tの4人分の機器スロットを利用者へ割当。
+- USB BLEのスキャン、明示的なペアリング、保存履歴読取、自動探索と同期。
+- SQLiteへの永続保存、測定時刻のUTC正規化と重複排除。
+- QnapSelfCare形式のCSV取込・出力、JSONバックアップ・空の保存先への復元。
+- GitHub Releaseの更新確認、SHA-256を確認したQPKG取得。適用はApp Centerから行います。
+
+| サービス | 待ち受け | 役割 |
 | --- | --- | --- |
-| HEM-6232T | QNAPのHome Assistant Container + ESPHome Bluetooth Proxy + `hass-omron` を利用し、測定イベントをローカル保存層へ取り込む | 設計のみ。実機ペアリング・履歴同期を検証する |
-| HBF-228T | 端末内の履歴をBLE GATTで読み、利用者スロットと測定日時を保持して保存する専用アダプター | 設計のみ。ESPHome Bluetooth Proxy経由の任意GATT操作は未確認。USB BLEまたは専用ESP32ファームウェアを実機で選定する |
-| データ | SQLite（測定時刻・受信時刻・機器ID・利用者スロット・単位・元データの識別子）をQPKG外の永続領域に置き、重複を防ぐ | 未実装 |
-| Web管理画面 | QPKGから起動し、状態・機器・更新情報を表示 | 0.2.6はLANおよびTailscale経由でログイン不要、読み取り専用。測定データは表示・収集しない |
-| 更新 | GitHubの最新安定版Releaseを照会し、機種別QPKGをSHA-256検証後に取得。App Centerで手動適用 | CLIによる照会・検証付き取得、Web画面による更新通知とQPKGのリンクを実装 |
+| QnapSelfCare | `17863` | 健康記録の管理・表示・収集依頼 |
+| QnapHomeHub | `8787` | SwitchBot・Matter連携の管理・操作依頼 |
+| 共通radio | TCPポートなし | NAS内Unixソケットで依頼を受け、USB BLEを直列制御 |
 
-この設計ではQPKGは設定・保存・更新の入口を担当します。Home AssistantとBluetooth Proxyは別コンポーネントとして利用し、既存Container Stationの設定や他のコンテナを自動で変更しません。いずれの測定器もBluetoothペアリング、通信可能な時間帯、履歴の保持数に依存するため「測るだけで常に即時保存」を保証する段階ではありません。OMRON connect側の履歴は移行前にエクスポート・バックアップしてください。ペアリング先を変えると従来の同期が使えなくなる可能性があります。
+QnapHomeHub 0.3.0のradioサービスとの共用が既定です。通常はSelfCare用BlueZを維持し、SwitchBot操作時だけNobleへ切り替えます。別のドングルを使う場合、またはHomeHubを使わない場合は直接接続も選べます。[USB Bluetooth導入・共存手順](docs/bluetooth-homehub.md)を参照してください。
 
-## QPKGの構成
+## Web画面と起動
 
-```text
-QnapSelfCare QPKG
-  selfcare.sh            Webサービスの起動・停止
-  webapp.py / web/       読み取り専用管理画面
-  updater.py             GitHub Releaseの確認とQPKG取得
-  adapters/hem6232t      Home Assistant側の受信・バックフィル（将来）
-  adapters/hbf228t       BLE GATT履歴読取（実機検証後）
-  store/                 SQLite保存・重複排除・CSVエクスポート（将来）
-  qpkg/icons/            App Center用アイコン
+QPKGをApp Centerでインストール・有効化し、`http://<NASのIP>:17863/` を開きます。QPKGはIPv4全インターフェースで待ち受け、接続元サブネットを限定しません。TailscaleでNASのIPv4へ到達できる場合も同じポートです。認証を設けない構成のため、到達できる人は健康記録の閲覧・編集ができます。NASのアクセス設定で利用範囲を管理してください。
+
+Python 3.8以降と既存の `/share/Container` 共有フォルダを使います。`python3-path` がPython3 QPKG、`/opt/bin/python3.11`、`/opt/bin/python3`などを探索します。特殊な場所は `SELFCARE_PYTHON` で指定できます。起動に `nohup` は不要です。Web・保存・CSV機能はPython標準ライブラリだけで動作します。共通radioを利用する場合、NAS本体へのBleakやBlueZの追加は不要です。
+
+ログは `/share/Container/QnapSelfCare/logs/selfcare.log`、インストール先は次で確認できます。
+
+```sh
+/sbin/getcfg QnapSelfCare Install_Path -f /etc/config/qpkg.conf
 ```
 
-QPKGはQDKでビルドし、NASのCPUアーキテクチャごとにRelease assetを用意します。Container Station、Home Assistant、Bluetooth Proxyは明示的なセットアップ手順に従って導入します。健康データの保存は未実装です。バックアップ対象・アクセス権・削除方法を実装段階で定義します。
+最初に「設定・バックアップ」で利用者を追加します。手入力・CSV取込はすぐに利用できます。Bluetoothを使う場合は、共通radioの導入後に機器を登録し、利用者スロットを割当、ペアリング、手動同期の順で確認してから自動同期を有効にします。
 
-## Web管理画面
+## 保存とバックアップ
 
-0.2.6 QPKGをApp Centerでインストールして有効化すると、管理画面が `http://<NASのLAN IPv4>:17863/` で起動します。App Centerの「開く」からもアクセスできます。ログインやSSHポート転送は不要です。サーバーはNASのLANインターフェースに割り当てられたプライベートIPv4、localhost、割り当てられていればtailscale0のIPv4で待ち受けます。既定経路のIPがLANのIPと異なっていても、実際のインターフェースから探します。接続元のサブネットによる制限は行いません。LANインターフェースのIPv4を特定できないときはサービスログに原因を記録して起動を止めます。
+永続データの既定ルートは `/share/Container/QnapSelfCare` です。QPKG本体の更新とは別に保持します。
 
-### Tailscale経由で開く
+| パス | 内容 |
+| --- | --- |
+| `data/measurements.sqlite3` | 利用者、機器、記録、重複防止、操作結果、機器のアプリ側ペアリングキー |
+| `config/` | ペアリング中の復旧用キー（非公開） |
+| `logs/selfcare.log` | サービスログ |
+| HomeHub側 `data/bluetooth/` | 共通radioのBlueZ bonding情報 |
 
-- NASにTailscaleをインストール済み: iPhoneでも同じtailnetに接続します。NASに `tailscale0` インターフェースがある場合は `http://<NASのTailscale IPv4>:17863/` を開きます。NASのTailscale IPはNAS側の `tailscale ip -4` で確認できます。QNAPのTailscaleがユーザー空間ネットワーク方式で動いている場合は、下記のTailscale Serve経由でアクセスします。
-- 別の機器がNASのLANに向けてTailscaleサブネットルートを配信している: iPhoneでTailscaleを有効にし、ルートが利用できれば `http://192.168.68.57:17863/` を開きます。LANのアドレスが変わった場合は実際のNASのIPv4に置き換えてください。
-- NAS上でTailscale Serveを使う場合: `tailscale serve status` で既存設定を確認してから `tailscale serve --bg 17863` を実行し、コマンドが表示するtailnet内のHTTPS URLを開きます。既存の443番Serve設定を使っている場合はその設定に合わせてください。Serveを使わなくても上記のHTTP接続で利用できます。
+DB・設定は管理者用の権限で保存します。WebのJSONバックアップには利用者・機器・全記録・削除履歴を含めますが、ペアリングキーは含めません。復元後は再ペアリングし、自動同期を再度有効にします。復元時は既存データへ上書きせず、全内容の検証と保存を1トランザクションで実行します。ファイル上限32MB・記録100,000件です。完全な運用バックアップには、SelfCareとradioを停止して上記ディレクトリを権限を保持してコピーしてください。
 
-接続失敗時はNASにSSH接続し、`/sbin/getcfg QnapSelfCare Install_Path -f /etc/config/qpkg.conf` でインストール先を確認して `/share/Container/QnapSelfCare/logs/selfcare.log` を参照してください。起動には既存の `/share/Container` 共有フォルダが必要です。QPKG本体とPIDファイルはインストール先、永続ログは `/share/Container/QnapSelfCare` に置きます。起動スクリプトは `nohup` を使いません。`/sbin/getcfg Python3 Install_Path -d '' -f /etc/config/qpkg.conf`、`ls -l /opt/bin/python3.11 /opt/bin/python3 2>/dev/null`、`command -v python3` でPython 3の候補を確認し、`netstat -lnt | grep 17863` で待ち受けを確認できます。ブラウザの `ERR_CONNECTION_FAILED` はサービスの未起動や通信経路の問題でも起こります。NAS実機とiPhoneからの到達は未検証です。
+CSVは画面からテンプレートを取得できます。`measured_at` は `2026-09-25T07:30:00+09:00` のように時差を含めます。`kind` は `blood_pressure` または `body_composition`、利用者は画面で選択またはCSV内の `user_id` を使います。1回8MB・10,000件まで全行を検証し、エラーがあれば保存しません。OMRON connect独自形式のCSVをそのまま読む機能ではありません。表計算での数式実行を避けるため、出力CSVの該当文字列には先頭のアポストロフィを付けます。
 
-Python 3.8以降がNASに必要です。起動スクリプトと更新コマンドは共通の `python3-path` を使い、App CenterのPython3 QPKGの登録先、`/opt/bin/python3.11`、`/opt/bin/python3`、`/opt/python3/bin/python3`、`/usr/local/bin/python3`、PATHの順に実行できるPythonを探します。特殊な配置の場合は `SELFCARE_PYTHON=/実際の/パス/python3` を起動時の環境変数に指定できます。見つからないときは上記ログにエラーを記録します。管理画面は認証なしのHTTPです。NAS側のネットワーク設定で到達できる相手は誰でも閲覧できます。ポート17863をインターネットへ転送しないでください。現段階では血圧や体重の個人データを保存・表示しません。アイコンの原稿は `web/icon.svg`、QDK用PNGは `qpkg/icons/` にあります。
+## BLEの範囲
 
-Bluetoothアダプター名はNASのsysfsから読み取り専用で表示します。QnapHomeHubが使用中のドングルとの共存条件とOmronへの接続手順は[Bluetooth共存設計](docs/bluetooth-homehub.md)を参照してください。アダプターを検出してもOmron機器と接続できたことは意味しません。
+HEM-6232Tは血圧・脈拍、HBF-228Tは体重・体脂肪率・骨格筋率・BMI・基礎代謝・体年齢・内臓脂肪レベルを読み取ります。機器内の有効な記録のみを扱い、未設定スロットは収集しません。機器時計は設定したUTC時差で解釈します。機器の時計や測定履歴を消去・書換えする操作は実装していません。ペアリング時は接続用キーを登録します。
 
-## 更新の使い方（開発者向け）
+自動同期は、未待機の機器があると約10秒スキャンし、検出した登録機器だけに接続します。成功・失敗にかかわらず機器ごとの同期間隔を設けます。広告停止中やスマートフォンとの接続中は収集できません。保存可能な履歴件数、電波、旧QNAPカーネルとUSBドングルの互換性は実機に依存します。
 
-`./selfcare-update check --current-version 0.2.6 --arch x86_64` で公開中の最新安定版を確認します。新しいQPKGがある場合、`./selfcare-update download --current-version 0.2.6 --arch x86_64 --dest /path/to/private/staging` で取得します。`--arch` はNASに対応するRelease asset名の値を指定してください。管理画面の更新確認ボタンからも新しいQPKGへのリンクを表示します。QPKGは `x86_64` と `arm_64` 向けにQDKでビルドします。NASのCPU種別とQTSのバージョンを確認して該当するファイルをApp Centerから手動インストールしてください。実機インストールの検証は未実施です。
+## 開発・更新
 
-Releaseのタグは `vX.Y.Z`、assetは `QnapSelfCare_X.Y.Z_<arch>.qpkg` とします。GitHubのRelease APIが返すassetの `digest`（`sha256:...`）がない場合は取得しません。取得後もSHA-256を照合し、失敗時はファイルを残しません。ドラフト・プレリリース・同一/旧バージョンは対象外です。QPKGの**適用はQNAP App Centerの手動インストール**で行います。更新確認や取得によってサービス・DB・コンテナは変更されません。
+```sh
+python3 -m unittest discover -s tests -v
+npm ci
+npm test
+python3 webapp.py --port 17863 --data-dir /tmp/selfcare-dev
+```
 
-## 実装マイルストーン
+開発起動はloopback待ち受けです。`--lan` で全IPv4インターフェースを使用します。CIはPython・DOM操作テストとQDKのx86_64 / arm_64ビルドを行います。実機BLE・NASのコンテナ起動はCIの対象外です。
 
-1. QPKG設計、QDKビルド、Release照会・検証付き取得、LANとTailscale経由で開ける管理画面とアイコン（0.2.6）。
-2. QNAP実機でのインストール・更新・アンインストール、サービス起動とアクセスを検証。
-3. HEM-6232TをHome Assistant経由で取り込み、日時・利用者・重複・再接続を検証。
-4. HBF-228TのBLE経路と読める項目を実機で確定し、履歴・複数ユーザーを検証。
-5. ローカル表示、CSV移行、更新通知とバックアップを仕上げる。
+```sh
+./selfcare-update check --current-version 0.3.0 --arch x86_64
+./selfcare-update download --current-version 0.3.0 --arch x86_64 --dest /path/to/private/staging
+```
 
-既存のopenScale実装はHBF-228TのWLCプロトコルの参考資料ですが、GPLコードをそのまま取り込む場合は配布ライセンスと依存関係を確認します。対応項目を推測で増やしません。
+配布名は `QnapSelfCare_X.Y.Z_<arch>.qpkg` です。GitHubが返すSHA-256 digestとダウンロードを照合し、不一致・digest欠落時は取得を完了しません。
 
-## 参考資料
-
-- [hass-omron](https://github.com/eigger/hass-omron)（HEM-6232T対応とペアリング条件）
-- [openScale HBF-228T実装](https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/OmronWlcHandler.kt)（WLC履歴転送）
-- [QNAP QPKG開発ガイド](https://www.qnap.com/en/how-to/tutorial/article/qpkg-development-guidelines)
-- [QDK](https://github.com/qnap-dev/QDK)
-- [GitHub Releases API](https://docs.github.com/en/rest/releases/releases)
+BLEのプロトコル実装・第三者コードの出典と配布条件は [THIRD_PARTY.md](THIRD_PARTY.md) に記載しています。

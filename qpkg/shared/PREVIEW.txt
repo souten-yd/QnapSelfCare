@@ -1,27 +1,9 @@
-QnapSelfCare 0.2.6 preview
+QnapSelfCare 0.3.0
 
-This QPKG installs a local web dashboard and GitHub Release update checker.
-HEM-6232T and HBF-228T measurement collection is not implemented.
-Python 3.8+ is required for the web server and update checker; it is not bundled.
-The resolver checks the Python3 QPKG Install_Path, /opt/bin/python3.11, /opt/bin/python3,
-/opt/python3/bin/python3, /usr/local/bin/python3, and then PATH.
-Set SELFCARE_PYTHON to an explicit executable path for other layouts.
-The service requires an existing /share/Container shared folder. Its log is
-/share/Container/QnapSelfCare/logs/selfcare.log. Startup does not need nohup.
-
-The read-only preview does not require a login. Open it from App Center,
-visit http://<NAS-LAN-IP>:17863/, or, with a tailscale0 interface on the NAS, visit
-http://<NAS-TAILSCALE-IP>:17863/. A subnet router can also route to the LAN IP.
-For userspace Tailscale, run tailscale serve --bg 17863 to serve localhost.
-The server listens only on assigned private LAN interface IPs, loopback,
-and assigned tailscale0 IPv4; it does not filter client IPs. The default
-route address is not assumed to be the LAN interface address.
-Only devices allowed by the NAS network and tailnet can reach it.
-Do not forward port 17863 to the public Internet.
-
-Run over SSH from the QPKG installation directory:
-  ./selfcare-update check --current-version 0.2.6 --arch x86_64
-or replace x86_64 with arm_64 on an ARM64 NAS.
-
-The download action verifies size and SHA-256 and stages a QPKG in an
-existing private directory. Apply updates manually in App Center.
+Local health records, user/device settings, CSV import/export, JSON backup/restore.
+UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
+Use QnapHomeHub 0.3.0 shared USB radio service for the same dongle.
+HomeHub UI stays on 8787; the shared radio uses a Unix socket, no public port.
+ESP32 is not used. Optional standalone USB setup is in bluetooth/ and scripts/.
+Hardware pairing and measurement synchronization require validation on the NAS.
+Read README.md and docs/bluetooth-homehub.md before pairing.
