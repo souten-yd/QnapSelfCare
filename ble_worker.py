@@ -18,6 +18,12 @@ class Session:
         self.unlocks = asyncio.Queue()
         self.channels = {}
 
+    def record_response(self, entry):
+        if self.trace is not None:
+            responses = self.trace.setdefault('responses', [])
+            responses.append(entry)
+            del responses[:-8]
+
     async def subscribe(self):
         await self.client.start_notify(protocol.UNLOCK, lambda _, data: self.unlocks.put_nowait(bytes(data)))
         for index, char in enumerate(protocol.RX):
@@ -30,6 +36,8 @@ class Session:
             return
         size = first[0]
         if not 8 <= size <= 64:
+            self.record_response({'kind': 'fragment', 'channel': channel, 'raw_hex': data[:16].hex(),
+                                  'error': 'invalid_length'})
             self.channels.clear()
             self.frames.put_nowait(ValueError("Bluetooth応答の長さが不正です"))
             return
@@ -44,10 +52,16 @@ class Session:
             self.trace['stage'] = {1: 'unlock', 2: 'pairing_mode', 0: 'key_programming'}.get(opcode, 'unlock')
             self.trace['expected_unlock_status'] = bytes([expected, 0]).hex()
         await self.client.write_gatt_char(protocol.UNLOCK, bytes([opcode]) + key, response=True)
-        data = await asyncio.wait_for(self.unlocks.get(), 10)
+        try:
+            data = await asyncio.wait_for(self.unlocks.get(), 10)
+        except asyncio.TimeoutError:
+            self.record_response({'kind': 'unlock', 'opcode': opcode, 'error': 'timeout'})
+            raise
         if self.trace is not None:
             # Only the two-byte status. Never log the application key or bonding material.
             self.trace['unlock_status'] = data[:2].hex()
+            self.record_response({'kind': 'unlock', 'opcode': opcode, 'status_hex': data[:2].hex(),
+                                  'expected_hex': bytes([expected, 0]).hex()})
         if data[:2] != bytes([expected, 0]):
             raise ValueError("ペアリング応答が一致しません。機器を-P-表示にして再実行してください" if opcode != 1 else
                              "保存したペアリングキーが一致しません。機器の再ペアリングが必要です")
@@ -61,12 +75,27 @@ class Session:
             self.frames.get_nowait()
         packet = protocol.command(opcode, address, length)
         await self.client.write_gatt_char(protocol.TX[0], packet, response=True)
-        data = await asyncio.wait_for(self.frames.get(), 10)
+        try:
+            data = await asyncio.wait_for(self.frames.get(), 10)
+        except asyncio.TimeoutError:
+            self.record_response({'kind': 'command', 'opcode': opcode, 'address': address,
+                                  'length': length, 'error': 'timeout',
+                                  'fragments': {str(i): part[:16].hex() for i, part in self.channels.items()}})
+            raise
         if isinstance(data, Exception):
             raise data
+        entry = {'kind': 'command', 'opcode': opcode, 'address': address, 'length': length,
+                 'raw_hex': data[:64].hex()}
+        self.record_response(entry)
         try:
-            return protocol.response(data, opcode, address, length)
-        except ValueError:
+            payload = protocol.response(data, opcode, address, length)
+            if self.trace is not None:
+                entry['status'] = 'valid'
+                entry['payload_length'] = len(payload)
+            return payload
+        except ValueError as error:
+            if self.trace is not None:
+                entry['error'] = str(error)[:120]
             if self.trace is not None and opcode == 1:
                 self.trace['invalid_response_hex'] = data[:64].hex()
             raise

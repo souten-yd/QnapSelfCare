@@ -1,8 +1,8 @@
-QnapSelfCare 0.3.7
+QnapSelfCare 0.3.8
 
 Local health records, OMRON history transfer, personalized trend lines, wellness goals, food notes and AI coaching.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
-Use QnapHomeHub 0.3.1 shared USB radio service for diagnostic sync on the same dongle.
+Use QnapHomeHub 0.3.2 shared USB radio service for diagnostic sync on the same dongle.
 HomeHub UI stays on 8787; the shared radio uses a Unix socket, no public port.
 ESP32 is not used. Optional standalone USB setup is in bluetooth/ and scripts/.
 Hardware pairing and measurement synchronization require validation on the NAS.

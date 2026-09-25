@@ -142,6 +142,35 @@ class ProtocolTests(unittest.TestCase):
                 bridge_request('/tmp/dummy', {'action': 'pair'})
         self.assertEqual(caught.exception.diagnostic, {'stage': 'pairing_mode'})
 
+    def test_diagnostic_keeps_bounded_device_responses_and_timeout_fragments(self):
+        async def exercise():
+            trace = {'stage': 'starting', 'slots': []}
+            client = AsyncMock()
+            session = Session(client, trace)
+            frame = bytes([10, 129, 0, 2, 192, 2, 10, 11, 0])
+            frame += bytes([p.checksum(frame)])
+            for _ in range(9):
+                session.frames.put_nowait(frame)
+                async def deliver():
+                    await asyncio.sleep(0)
+                    session.frames.put_nowait(frame)
+                asyncio.create_task(deliver())
+                self.assertEqual(await session.request(1, 0x2c0, 2), b'\x0a\x0b')
+            self.assertEqual(len(trace['responses']), 8)
+            self.assertEqual(trace['responses'][-1]['raw_hex'], frame.hex())
+            self.assertEqual(trace['responses'][-1]['status'], 'valid')
+            async def timeout_with_fragment(awaitable, seconds):
+                awaitable.close()
+                session.channels[0] = bytes.fromhex('200102')
+                raise asyncio.TimeoutError
+            with patch('ble_worker.asyncio.wait_for', side_effect=timeout_with_fragment):
+                with self.assertRaises(asyncio.TimeoutError):
+                    await session.request(1, 0x2c0, 2)
+            self.assertEqual(trace['responses'][-1]['error'], 'timeout')
+            self.assertEqual(trace['responses'][-1]['fragments'], {'0': '200102'})
+            self.assertNotIn('key', str(trace))
+        asyncio.run(exercise())
+
 
 if __name__ == '__main__':
     unittest.main()
