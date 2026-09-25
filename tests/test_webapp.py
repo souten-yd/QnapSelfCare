@@ -1,5 +1,6 @@
 from http.server import ThreadingHTTPServer
 import json
+import ipaddress
 import threading
 import tempfile
 import unittest
@@ -51,6 +52,19 @@ class WebAppTests(unittest.TestCase):
             (root / "other").mkdir()
             self.assertEqual(webapp.bluetooth_adapters(root), ["hci0", "hci1"])
             self.assertEqual(webapp.bluetooth_adapters(root / "missing"), [])
+
+    def test_only_same_private_subnet_can_read(self):
+        self.assertEqual(webapp.private_subnet("192.168.20.5", "255.255.255.0"),
+                         ipaddress.ip_network("192.168.20.0/24"))
+        with self.assertRaises(ValueError):
+            webapp.private_subnet("10.0.0.5", "254.0.0.0")
+        self.server.lan_network = ipaddress.ip_network("192.168.20.0/24")
+        try:
+            with self.assertRaises(HTTPError) as denied:
+                self.request("/api/status")
+            self.assertEqual(denied.exception.code, 403)
+        finally:
+            self.server.lan_network = None
 
 
 if __name__ == "__main__":
