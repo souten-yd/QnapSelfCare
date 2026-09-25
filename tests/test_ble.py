@@ -46,6 +46,22 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.response(bytes.fromhex('08810002c020006b'), 1, 0x2c0, 32)
 
+    def test_session_ack_accepts_device_info_without_accepting_truncation(self):
+        # User capture begins 18 80 00 00 00 10; payload here is synthetic.
+        info = bytes(range(16))
+        frame = bytes.fromhex('188000000010') + info + b'\x00'
+        frame += bytes([p.checksum(frame)])
+        self.assertEqual(p.response(frame, 0, 0, 16), info)
+        for payload in (info[:-1], info + b'\x00'):
+            bad = bytes([len(payload) + 8, 0x80, 0, 0, 0, 16]) + payload + b'\x00'
+            bad += bytes([p.checksum(bad)])
+            with self.assertRaises(ValueError):
+                p.response(bad, 0, 0, 16)
+        bad = frame[:5] + b'\x0f' + frame[6:-1]
+        bad += bytes([p.checksum(bad)])
+        with self.assertRaises(ValueError):
+            p.response(bad, 0, 0, 16)
+
     def test_cuff_pairing_authenticates_programmed_key_before_session_open(self):
         async def exercise():
             characteristic = Mock(properties=['write-without-response'])
@@ -70,7 +86,10 @@ class ProtocolTests(unittest.TestCase):
                     operations.append(('command', packet[1]))
                     if packet[1] == 0:
                         self.assertTrue(authenticated, 'cuff requires auth after key programming')
-                        session.notify(0, bytes.fromhex('0880000000100098'))
+                        start = bytes.fromhex('188000000010') + bytes(range(16)) + b'\x00'
+                        start += bytes([p.checksum(start)])
+                        session.notify(0, start[:16])
+                        session.notify(1, start[16:])
                     else:
                         session.notify(0, bytes.fromhex('088f000000000087'))
             client.write_gatt_char = AsyncMock(side_effect=write)

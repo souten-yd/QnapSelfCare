@@ -299,7 +299,7 @@ def main():
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         request = json.loads(sys.stdin.read(65536))
         if request.get('action') in ('pair', 'sync') and request.get('diagnostic') is True:
-            trace = {'stage': 'starting', 'slots': [], 'protocol_revision': 2, 'rx_notifications': 0}
+            trace = {'stage': 'starting', 'slots': [], 'protocol_revision': 3, 'rx_notifications': 0}
         result = asyncio.run(asyncio.wait_for(operate(request, trace), 180))
         print(json.dumps(result))
     except Exception as error:
