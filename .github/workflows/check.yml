@@ -46,12 +46,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.2.1 >/dev/null 2>&1; then
-            echo 'Release v0.2.1 already exists; leaving it unchanged.'
+          if gh release view v0.2.2 >/dev/null 2>&1; then
+            echo 'Release v0.2.2 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.2.1 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.2.1 preview' \
-            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard listens on 127.0.0.1:17863 only; use SSH port forwarding to reach it. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
+          gh release create v0.2.2 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.2.2 preview' \
+            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard binds only to the private LAN IPv4 and accepts the interface subnet; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
             --target "$GITHUB_SHA"
