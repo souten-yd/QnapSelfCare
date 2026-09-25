@@ -3,3 +3,5 @@
 #update-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto}#update-backup{overflow-wrap:anywhere}
 
 .diagnostic{border-left:4px solid #238876;padding:10px 14px;margin:12px 0;background:#f4f8f6}.diagnostic p{margin:5px 0;font-size:13px}.diagnostic.warning{border-color:#be841f}.diagnostic.error,.notice.error{border-color:#b54439;background:#fceeea;color:#8b352d}.backup-row{padding:16px 0;border-bottom:1px solid #e4ece8;overflow-wrap:anywhere}.backup-row small{display:block}#protection-status{overflow-wrap:anywhere}#protection-message{white-space:pre-wrap}
+
+.scan-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.scan-controls select{max-width:180px}.scan-result span{overflow-wrap:anywhere}

@@ -168,6 +168,7 @@ class CollectorManager:
                 result = dict(saved, invalid_records=invalid)
                 message = f"{saved['inserted']}件追加・{saved['duplicates']}件重複・{invalid}件日時不正"
             else:
+                result = dict(result, adapter=adapter, transport=transport)
                 message = f"{len(result.get('devices', []))}台検出しました"
             self.store.update_job(identifier, "done", message, result)
         except Exception as error:

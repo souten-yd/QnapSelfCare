@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const metrics = {systolic:['最高血圧','mmHg'],diastolic:['最低血圧','mmHg'],pulse:['脈拍','bpm'],weight:['体重','kg'],body_fat:['体脂肪率','%'],muscle:['骨格筋率','%'],visceral_fat:['内臓脂肪',''],bmi:['BMI',''],bmr:['基礎代謝','kcal'],body_age:['体年齢','歳']};
-let users=[], devices=[], chartRecords=[], historyRecords=[], offset=0, activePage='overview', editedRecord=null, previousJobState='';
+let users=[], devices=[], chartRecords=[], historyRecords=[], offset=0, activePage='overview', editedRecord=null, previousJobState='', previousScanRender='';
 function element(tag, text, className) { const node=document.createElement(tag); if(text!==undefined) node.textContent=text; if(className) node.className=className; return node; }
 function message(text, error=false) { $('message').textContent=text; $('message').className='message'+(error?' error':''); $('message').hidden=false; }
 function localInput(value=new Date()) { const d=new Date(value); return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,19); }
@@ -34,7 +34,45 @@ function editDevice(d){const f=$('device-form');for(const key of ['id','name','m
 function renderDevices(){$('device-list').replaceChildren();devices.forEach(d=>{const card=element('article',undefined,'card'),header=element('div',undefined,'row');header.append(element('h2',d.name),element('span',d.paired?'ペアリング済み':'未ペアリング','badge'));card.append(header,element('p',`${d.model}・${d.address||'アドレス未設定'}・${d.adapter}`),element('p',`自動同期: ${d.auto_sync?'ON / '+d.interval+'秒':'OFF'}　利用者割当: ${Object.entries(d.bindings).map(([s,u])=>s+'番 '+currentUserName(u)).join(' / ')||'未設定'}`));const row=element('div',undefined,'row');for(const [action,label] of [['pair','ペアリング'],['sync','履歴を同期']]){const b=element('button',label,action==='pair'?'secondary':'');b.addEventListener('click',guarded(async()=>{if(action==='pair'&&!confirm('機器をペアリングモードにしてください。既存のスマートフォン連携キーを変更する場合があります。続けますか？'))return;await api('/api/jobs',{action,device_id:d.id});message('処理を受け付けました。操作履歴で進捗を確認できます');await refreshJobs();}));row.append(b);}const edit=element('button','設定','secondary');edit.addEventListener('click',()=>editDevice(d));const remove=element('button','削除','danger');remove.addEventListener('click',guarded(async()=>{if(!confirm('この機器登録を削除しますか？'))return;await api('/api/devices/'+d.id,{},'DELETE');await refreshMeta();}));row.append(edit,remove);card.append(row);$('device-list').append(card);});}
 $('device-form').addEventListener('submit',guarded(async()=>{const f=$('device-form'),form=new FormData(f),body=Object.fromEntries(form);body.auto_sync=f.elements.auto_sync.checked;body.exclusive=f.elements.exclusive.checked;body.interval=Number(form.get('interval'));body.utc_offset_minutes=Number(form.get('utc_offset_minutes'));body.bindings=Object.fromEntries([...$('bindings').querySelectorAll('select')].filter(s=>s.value).map(s=>[s.name,s.value]));await api('/api/devices',body);resetDevice();await refreshMeta();message('機器設定を保存しました');}));
 $('scan').addEventListener('click',guarded(async()=>{await api('/api/jobs',{action:'scan',adapter:$('scan-adapter').value,exclusive:$('scan-exclusive').checked,transport:$('scan-transport').value});message('スキャンを開始しました');await refreshJobs();}));
-async function refreshJobs(){const jobs=await api('/api/jobs');$('jobs').replaceChildren();if(!jobs.length)$('jobs').append(element('p','まだ同期・操作履歴はありません'));jobs.forEach(j=>{const row=element('div',undefined,'job '+j.state);row.append(element('strong',({queued:'待機中',running:'実行中',done:'完了',failed:'失敗'})[j.state]),element('span',`${({scan:'スキャン',pair:'ペアリング',sync:'同期'})[j.action]} — ${devices.find(d=>d.id===j.device_id)?.name||'Bluetooth'}`),element('small',`${dateText(j.created_at)}　${j.message}`));$('jobs').append(row);});const scan=jobs.find(j=>j.action==='scan'&&j.state==='done'&&j.result);if(scan){const result=JSON.parse(scan.result);$('scan-results').replaceChildren();result.devices.forEach(d=>{const row=element('div',undefined,'scan-result');row.append(element('span',`${d.name}　${d.address}　${d.rssi} dBm`));const use=element('button','登録に使う','secondary');use.addEventListener('click',()=>{resetDevice();const f=$('device-form');f.elements.address.value=d.address;f.elements.name.value=d.name;f.elements.adapter.value=$('scan-adapter').value;f.elements.exclusive.checked=$('scan-exclusive').checked;f.elements.transport.value=$('scan-transport').value;const n=d.name.toLowerCase();if(n.includes('hbf-228')||n.startsWith('blesmart_0001000b'))f.elements.model.value='HBF-228T';renderBindings();$('device-panel').open=true;$('device-panel').scrollIntoView({behavior:'smooth'});});row.append(use);$('scan-results').append(row);});}const state=jobs.map(j=>j.id+':'+j.state).join();if(previousJobState&&state!==previousJobState&&jobs.some(j=>j.state==='done')){await refreshMeta();await refreshRecords();}previousJobState=state;}
+function detectedModel(name){const n=(name||'').toLowerCase();if(/(?:^|[^a-z0-9])hem-6232t(?:$|[^a-z0-9])/.test(n))return 'HEM-6232T';if(/(?:^|[^a-z0-9])hbf-228t(?:$|[^a-z0-9])/.test(n)||/^blesmart_0001000b[0-9a-f]*$/.test(n))return 'HBF-228T';return '';}
+function renderScan(scan){
+ const target=$('scan-results');target.replaceChildren();
+ if(!scan||scan.state!=='done'||!scan.result)return;
+ if(Date.now()-Date.parse(scan.created_at)>180000){target.append(element('p','検出結果が古くなりました。機器を通信可能にして再スキャンしてください。'));return;}
+ const result=JSON.parse(scan.result);
+ if(!result.adapter||!result.transport){target.append(element('p','更新前の検出結果です。機器を再スキャンしてください。'));return;}
+ if(!result.devices.length){target.append(element('p','機器が見つかりません。機器をペアリングモードにして再スキャンしてください。'));return;}
+ for(const d of result.devices){
+  const row=element('div',undefined,'scan-result'),controls=element('div',undefined,'scan-controls');
+  row.append(element('span',`${d.name}　${d.address}　${d.rssi} dBm`));
+  const existing=devices.find(device=>device.address.toUpperCase()===d.address.toUpperCase());
+  if(existing){row.append(element('span','登録済み: '+existing.name,'badge'));target.append(row);continue;}
+  const model=element('select');model.setAttribute('aria-label',d.name+' の機種');model.append(option('','機種を選択'),option('HEM-6232T','血圧計 HEM-6232T'),option('HBF-228T','体組成計 HBF-228T'));model.value=detectedModel(d.name);
+  const user=element('select');user.setAttribute('aria-label','測定する利用者');selectUsers(user,'利用者を選択');if(users.length===1)user.value=users[0].id;
+  const slot=element('select');slot.setAttribute('aria-label','機器の利用者番号');
+  function fillSlots(){slot.replaceChildren();for(let number=1;number<=(model.value==='HBF-228T'?4:2);number++)slot.append(option(String(number),'機器の'+number+'番'));}
+  model.addEventListener('change',fillSlots);fillSlots();
+  const use=element('button','登録してペアリング','secondary');
+  use.addEventListener('click',guarded(async()=>{
+   if(!users.length)throw Error('先に利用者を追加してください');
+   if(!model.value)throw Error('機種を選択してください。名前からは特定できません');
+   if(!user.value)throw Error('測定する利用者を選択してください');
+   if(!confirm('機器をペアリングモードにしてください。既存のスマートフォン連携キーが変更される場合があります。続けますか？'))return;
+   const transport=result.transport;
+   const saved=await api('/api/devices',{name:model.value,model:model.value,address:d.address,
+    adapter:result.adapter,transport,exclusive:transport==='direct',
+    bindings:{[slot.value]:user.value},auto_sync:true,interval:300,
+    utc_offset_minutes:-new Date().getTimezoneOffset()});
+   await refreshMeta();
+   try{await api('/api/jobs',{action:'pair',device_id:saved.id});}
+   catch(error){throw Error('機器は登録されました。ペアリング開始に失敗したため、機器一覧の「ペアリング」から再試行してください: '+error.message);}
+   message('登録してペアリングを開始しました。操作履歴で完了を確認してください');
+   await refreshJobs();
+  }));
+  controls.append(model,user,slot,use);row.append(controls);target.append(row);
+ }
+}
+async function refreshJobs(){const jobs=await api('/api/jobs');$('jobs').replaceChildren();if(!jobs.length)$('jobs').append(element('p','まだ同期・操作履歴はありません'));jobs.forEach(j=>{const row=element('div',undefined,'job '+j.state);row.append(element('strong',({queued:'待機中',running:'実行中',done:'完了',failed:'失敗'})[j.state]),element('span',`${({scan:'スキャン',pair:'ペアリング',sync:'同期'})[j.action]} — ${devices.find(d=>d.id===j.device_id)?.name||'Bluetooth'}`),element('small',`${dateText(j.created_at)}　${j.message}`));$('jobs').append(row);});const scan=jobs.find(j=>j.action==='scan');const scanKey=(scan?.id||'')+':'+(scan?.state||'')+':'+devices.map(d=>d.address).join(',');if(scanKey!==previousScanRender){renderScan(scan);previousScanRender=scanKey;}const state=jobs.map(j=>j.id+':'+j.state).join();if(previousJobState&&state!==previousJobState&&jobs.some(j=>j.state==='done')){await refreshMeta();await refreshRecords();}previousJobState=state;}
 async function refreshDiagnostics(){
  const [d,s]=await Promise.all([api('/api/diagnostics'),api('/api/status')]);
  const rows={'バージョン':s.version,'CPU':s.architecture||'不明','USB Bluetooth':s.bluetooth_adapters.join(', ')||'未検出',
