@@ -1,8 +1,11 @@
-QnapSelfCare 0.2.3 preview
+QnapSelfCare 0.2.4 preview
 
 This QPKG installs a local web dashboard and GitHub Release update checker.
 HEM-6232T and HBF-228T measurement collection is not implemented.
-Python 3 is required for the web server and update checker; it is not bundled.
+Python 3.8+ is required for the web server and update checker; it is not bundled.
+The resolver checks the Python3 QPKG Install_Path, /opt/bin/python3.11, /opt/bin/python3,
+/opt/python3/bin/python3, /usr/local/bin/python3, and then PATH.
+Set SELFCARE_PYTHON to an explicit executable path for other layouts.
 
 The read-only preview does not require a login. Open it from App Center,
 visit http://<NAS-LAN-IP>:17863/, or, with a tailscale0 interface on the NAS, visit
@@ -14,7 +17,7 @@ Only devices allowed by the NAS network and tailnet can reach it.
 Do not forward port 17863 to the public Internet.
 
 Run over SSH from the QPKG installation directory:
-  ./selfcare-update check --current-version 0.2.3 --arch x86_64
+  ./selfcare-update check --current-version 0.2.4 --arch x86_64
 or replace x86_64 with arm_64 on an ARM64 NAS.
 
 The download action verifies size and SHA-256 and stages a QPKG in an

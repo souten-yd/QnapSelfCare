@@ -15,11 +15,11 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/shared" "$output"
 cp "$root/qpkg/qpkg.cfg" "$work/qpkg.cfg"
 cp "$root/qpkg/package_routines" "$work/package_routines"
-cp "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/selfcare.sh" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$root/webapp.py" "$work/shared/"
+cp "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/selfcare.sh" "$root/qpkg/shared/python3-path" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$root/webapp.py" "$work/shared/"
 cp -R "$root/web" "$work/shared/web"
 mkdir -p "$work/icons"
 cp "$root/qpkg/icons/"*.png "$work/icons/"
-chmod 755 "$work/shared/selfcare-update" "$work/shared/selfcare.sh"
+chmod 755 "$work/shared/selfcare-update" "$work/shared/selfcare.sh" "$work/shared/python3-path"
 . "$work/qpkg.cfg"
 qbuild --root "$work" --build-arch "$arch" --build-dir "$work/build"
 mapfile -t packages < <(find "$work/build" -maxdepth 1 -type f -name '*.qpkg')
