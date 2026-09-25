@@ -1,68 +1,33 @@
-"""Small read-only status UI for QnapSelfCare."""
-
+"""QnapSelfCare local health record manager."""
 import argparse
-import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import ipaddress
 import json
+import os
 from pathlib import Path
 import platform
 import re
-import socket
-import struct
+import signal
 import threading
+from urllib.parse import parse_qs, urlsplit
 
 import updater
-
+from collectors import CollectorManager
+from storage import CSV_FIELDS, Store, integer
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.2.6"
+VERSION = "0.3.0"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
-PRIVATE_LANS = tuple(ipaddress.ip_network(cidr) for cidr in (
-    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-LAN_INTERFACE = re.compile(r"(?:eth|bond|br|qvs|ovs|wlan)[0-9]+$|en[a-z0-9]+$")
+MAX_BODY = 32 * 1024 * 1024
 
 
-def interface_ipv4(name):
-    """Read an interface's assigned IPv4 without changing its state."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
-        request = struct.pack("256s", name.encode("ascii"))
-        return socket.inet_ntoa(fcntl.ioctl(control.fileno(), 0x8915, request)[20:24])
-
-
-def listen_addresses():
-    """Bind actual LAN interface addresses regardless of the default route."""
-    lan_addresses = []
-    tailscale_address = None
-    for _, name in socket.if_nameindex():
-        if not LAN_INTERFACE.fullmatch(name) and name != "tailscale0":
-            continue
-        try:
-            address = ipaddress.IPv4Address(interface_ipv4(name))
-            if name == "tailscale0":
-                if address in ipaddress.ip_network("100.64.0.0/10"):
-                    tailscale_address = str(address)
-            elif any(address in private for private in PRIVATE_LANS):
-                if str(address) not in lan_addresses:
-                    lan_addresses.append(str(address))
-        except OSError:
-            pass  # Interfaces without an IPv4 address are normal on QNAP.
-    if not lan_addresses:
-        raise ValueError("no private IPv4 address found on a LAN interface")
-    addresses = lan_addresses + ["127.0.0.1"]
-    if tailscale_address and tailscale_address not in addresses:
-        addresses.append(tailscale_address)
-    return addresses
 def architecture(machine=None):
-    machine = machine or platform.machine()
-    return {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "arm_64", "arm64": "arm_64"}.get(machine)
+    return {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "arm_64", "arm64": "arm_64"}.get(machine or platform.machine())
 
 
 def bluetooth_adapters(root=BLUETOOTH_SYSFS):
-    """Report adapter names without scanning, bonding, or changing HCI state."""
     try:
-        return sorted(p.name for p in root.iterdir() if p.name.startswith("hci") and p.name[3:].isdigit())
+        return sorted(p.name for p in root.iterdir() if re.fullmatch(r"hci\d+", p.name))
     except OSError:
         return []
 
@@ -70,7 +35,15 @@ def bluetooth_adapters(root=BLUETOOTH_SYSFS):
 class Handler(BaseHTTPRequestHandler):
     server_version = "QnapSelfCare"
 
-    def _send(self, status, body, mime="application/json; charset=utf-8"):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(20)
+
+    @property
+    def store(self):
+        return self.server.store
+
+    def _send(self, status, body, mime="application/json; charset=utf-8", filename=None):
         self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
@@ -78,67 +51,149 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'self'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'self'")
+        if filename:
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(body)
 
     def _json(self, status, value):
-        self._send(status, json.dumps(value, ensure_ascii=False).encode("utf-8"))
+        self._send(status, json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
+
+    def _filters(self, query):
+        return {key: query[key][0] for key in ("user_id", "kind", "since", "until") if query.get(key)}
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        static = {
-            "/": ("index.html", "text/html; charset=utf-8"),
-            "/styles.css": ("styles.css", "text/css; charset=utf-8"),
-            "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-            "/icon.svg": ("icon.svg", "image/svg+xml"),
-        }
+        try:
+            self.get()
+        except (ValueError, TypeError) as error:
+            self._json(400, {"error": str(error)})
+        except (OSError, json.JSONDecodeError) as error:
+            self._json(503, {"error": f"読み込みに失敗しました: {error}"})
+
+    def get(self):
+        parsed = urlsplit(self.path)
+        path, query = parsed.path, parse_qs(parsed.query)
+        static = {"/": ("index.html", "text/html; charset=utf-8"),
+                  "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+                  "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                  "/icon.svg": ("icon.svg", "image/svg+xml")}
         if path in static:
             name, mime = static[path]
             self._send(200, (ROOT / "web" / name).read_bytes(), mime)
         elif path == "/api/status":
             self._json(200, {"version": VERSION, "architecture": architecture(),
                              "bluetooth_adapters": bluetooth_adapters(),
-                             "devices": {"HEM-6232T": "未接続", "HBF-228T": "未接続"},
-                             "collection_enabled": False})
+                             "record_count": self.store.records(limit=0)["total"],
+                             "collection_enabled": any(d["auto_sync"] for d in self.store.devices()),
+                             "data_path": str(self.store.path)})
+        elif path == "/api/users":
+            self._json(200, self.store.users())
+        elif path == "/api/devices":
+            self._json(200, self.store.devices())
+        elif path == "/api/records":
+            self._json(200, self.store.records(**self._filters(query),
+                limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),
+                offset=integer(query.get("offset", ["0"])[0], "開始位置", 0, 10000000)))
+        elif path == "/api/jobs":
+            self._json(200, self.store.jobs())
+        elif path == "/api/diagnostics":
+            self._json(200, self.server.collector.diagnostics())
+        elif path == "/api/export.csv":
+            self._send(200, self.store.export_csv(**self._filters(query)).encode(), "text/csv; charset=utf-8", "selfcare-records.csv")
+        elif path == "/api/template.csv":
+            self._send(200, ("\ufeff" + ",".join(CSV_FIELDS) + "\r\n").encode(), "text/csv; charset=utf-8", "selfcare-template.csv")
+        elif path == "/api/backup":
+            self._send(200, json.dumps(self.store.backup(), ensure_ascii=False).encode(), "application/json; charset=utf-8", "selfcare-backup.json")
         elif path == "/api/update":
             arch = architecture()
-            if arch is None:
-                self._json(400, {"error": "未対応のCPU構成です"})
-                return
-            try:
-                asset = updater.latest(VERSION, arch)
-            except (ValueError, OSError, json.JSONDecodeError) as error:
-                self._json(502, {"error": f"更新情報を取得できません: {error}"})
-                return
+            if not arch:
+                raise ValueError("未対応のCPU構成です")
+            asset = updater.latest(VERSION, arch)
             self._json(200, {"available": asset is not None,
                              "version": asset["version"] if asset else None,
                              "url": asset["url"] if asset else None})
         else:
             self._json(404, {"error": "見つかりません"})
 
+    def _body(self):
+        # A custom header prevents cross-origin HTML forms from changing records.
+        # This is not a login requirement; native integrations send the same header.
+        if self.headers.get("X-SelfCare-Request") != "1":
+            raise PermissionError("X-SelfCare-Request: 1 ヘッダーが必要です")
+        if self.headers.get_content_type() != "application/json":
+            raise ValueError("Content-Type: application/json が必要です")
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Content-Lengthを指定してください")
+        size = integer(self.headers.get("Content-Length", "0"), "リクエストサイズ", 2, MAX_BODY)
+        body = json.loads(self.rfile.read(size), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("有限の数値が必要です")))
+        if not isinstance(body, dict):
+            raise ValueError("JSONオブジェクトが必要です")
+        return body
+
     def do_POST(self):
-        self._json(405, {"error": "読み取り専用です"})
+        self.mutate("POST")
+
+    def do_DELETE(self):
+        self.mutate("DELETE")
+
+    def mutate(self, method):
+        try:
+            body = self._body()
+            path = urlsplit(self.path).path
+            if method == "POST":
+                if path == "/api/users":
+                    result = self.store.save_user(body)
+                elif path == "/api/devices":
+                    result = self.store.save_device(body)
+                elif path == "/api/records":
+                    result = self.store.add_records([body])
+                elif re.fullmatch(r"/api/records/[A-Za-z0-9_-]{1,64}", path):
+                    result = self.store.edit_record(path.rsplit("/", 1)[1], body)
+                elif path == "/api/import":
+                    result = self.store.import_csv(body.get("csv"), body.get("user_id")) if "csv" in body else self.store.add_records(body.get("records"), "api")
+                elif path == "/api/restore":
+                    result = self.store.restore(body)
+                elif path == "/api/jobs":
+                    result = self.server.collector.submit(body.get("action"), body.get("device_id"), body.get("adapter", "hci0"), body.get("exclusive", False), body.get("transport", "homehub"))
+                else:
+                    self._json(405, {"error": "対応していない操作です"})
+                    return
+            else:
+                match = re.fullmatch(r"/api/(users|devices|records)/([A-Za-z0-9_-]{1,64})", path)
+                if not match:
+                    self._json(404, {"error": "見つかりません"})
+                    return
+                kind, identifier = match.groups()
+                {"users": self.store.delete_user, "devices": self.store.delete_device, "records": self.store.delete_record}[kind](identifier)
+                result = {"deleted": True}
+            self._json(200, result)
+        except PermissionError as error:
+            self._json(403, {"error": str(error)})
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+            self._json(400, {"error": str(error)})
+        except Exception:
+            self._json(500, {"error": "保存処理に失敗しました。保存先の空き容量・権限を確認してください"})
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lan", action="store_true", help="listen on the LAN, loopback, and tailscale0 addresses")
+    parser.add_argument("--lan", action="store_true", help="listen on all IPv4 interfaces")
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--data-dir", default=os.environ.get("SELFCARE_DATA_DIR", "/share/Container/QnapSelfCare"))
     args = parser.parse_args()
-    addresses = listen_addresses() if args.lan else ["127.0.0.1"]
-    servers = []
-    try:
-        for address in addresses:
-            server = ThreadingHTTPServer((address, args.port), Handler)
-            servers.append(server)
-            print(f"QnapSelfCare listening on {address}:{args.port}", flush=True)
-        for server in servers[1:]:
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers[0].serve_forever()
-    finally:
-        for server in servers:
-            server.server_close()
+    os.umask(0o077)
+    store = Store(Path(args.data_dir) / "data")
+    collector = CollectorManager(store)
+    with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
+        server.store, server.collector = store, collector
+        collector.start()
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
+        print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)
+        try:
+            server.serve_forever()
+        finally:
+            collector.close()
 
 
 if __name__ == "__main__":

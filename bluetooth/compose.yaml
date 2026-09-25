@@ -1,0 +1,12 @@
+services:
+  bluetooth:
+    build:
+      context: ..
+      dockerfile: bluetooth/Dockerfile
+    container_name: qnapselfcare-bluetooth
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ${SELFCARE_DATA_DIR:-/share/Container/QnapSelfCare}:/data
+      - ${SELFCARE_DATA_DIR:-/share/Container/QnapSelfCare}/bluetooth:/var/lib/bluetooth
