@@ -15,8 +15,12 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/shared" "$output"
 cp "$root/qpkg/qpkg.cfg" "$work/qpkg.cfg"
 cp "$root/qpkg/package_routines" "$work/package_routines"
-cp "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$work/shared/"
-chmod 755 "$work/shared/selfcare-update"
+cp "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/selfcare.sh" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$root/webapp.py" "$work/shared/"
+cp -R "$root/web" "$work/shared/web"
+mkdir -p "$work/icons"
+cp "$root/qpkg/icons/"*.png "$work/icons/"
+chmod 755 "$work/shared/selfcare-update" "$work/shared/selfcare.sh"
+. "$work/qpkg.cfg"
 qbuild --root "$work" --build-arch "$arch" --build-dir "$work/build"
 mapfile -t packages < <(find "$work/build" -maxdepth 1 -type f -name '*.qpkg')
 if [[ ${#packages[@]} -ne 1 ]]; then
@@ -24,4 +28,4 @@ if [[ ${#packages[@]} -ne 1 ]]; then
   exit 1
 fi
 qbuild --query info "${packages[0]}"
-cp "${packages[0]}" "$output/QnapSelfCare_0.1.0_${arch}.qpkg"
+cp "${packages[0]}" "$output/QnapSelfCare_${QPKG_VER}_${arch}.qpkg"

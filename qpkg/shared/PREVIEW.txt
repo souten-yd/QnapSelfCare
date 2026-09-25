@@ -1,11 +1,19 @@
-QnapSelfCare 0.1.0 preview
+QnapSelfCare 0.2.0 preview
 
-This QPKG installs a command-line GitHub Release update checker only.
+This QPKG installs a local web dashboard and GitHub Release update checker.
 HEM-6232T and HBF-228T measurement collection is not implemented.
-Python 3 is required for the update checker; it is not bundled.
+Python 3 is required for the web server and update checker; it is not bundled.
+
+Open the QPKG from App Center or visit http://<NAS-LAN-IP>:17863/.
+Username: admin
+Password: contents of the admin-token file in the QPKG install directory.
+From SSH, find the path with:
+  /sbin/getcfg QnapSelfCare Install_Path -f /etc/config/qpkg.conf
+Then read admin-token as a NAS administrator. Do not expose this HTTP
+service directly to the Internet. Restrict access to a trusted LAN.
 
 Run over SSH from the QPKG installation directory:
-  ./selfcare-update check --current-version 0.1.0 --arch x86_64
+  ./selfcare-update check --current-version 0.2.0 --arch x86_64
 or replace x86_64 with arm_64 on an ARM64 NAS.
 
 The download action verifies size and SHA-256 and stages a QPKG in an

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c756f">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <title>QnapSelfCare | 管理画面</title>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><img src="/icon.svg" alt="" width="42" height="42"><span>Qnap<span class="brand-light">SelfCare</span></span></div>
+      <nav aria-label="メインメニュー"><a class="nav-item selected" href="/" aria-current="page"><span class="nav-icon">◫</span> 概要</a></nav>
+      <div class="sidebar-note">あなたの記録を、あなたのNASで。<small>Preview 0.2</small></div>
+    </aside>
+    <main>
+      <header class="topbar"><span class="breadcrumb">ワークスペース <span>／</span> 概要</span><span class="top-pill"><i></i> ローカル管理画面</span></header>
+      <div class="content">
+        <div class="eyebrow">QNAP HEALTH HUB <span class="line"></span> SYSTEM OVERVIEW</div>
+        <div class="heading"><div><h1>毎日の記録を、<br><em>ひとつの場所に。</em></h1><p>QnapSelfCare の管理画面です。機器の接続状況と更新情報を確認できます。</p></div><div class="illustration" aria-hidden="true"><div class="illustration-circle"><img src="/icon.svg" alt=""></div><div class="float-dot d1"></div><div class="float-dot d2"></div></div></div>
+        <div class="notice" role="status"><span class="notice-icon">i</span><span><strong>プレビュー版をご利用中です</strong><br>測定値の自動収集はまだ利用できません。機器のデータはこの画面には保存されていません。</span></div>
+        <div class="section-heading"><div><span class="section-kicker">YOUR DEVICES</span><h2>登録予定の機器</h2></div><span class="section-hint">2 台の機器を計画中</span></div>
+        <div class="devices">
+          <article class="device-card"><div class="device-top"><span class="device-symbol bp">♥</span><span class="badge pending" id="bp-state">未接続</span></div><p class="card-label">血圧計</p><h3>HEM-6232T</h3><p class="device-desc">最高血圧 · 最低血圧 · 脈拍</p><div class="device-footer"><span class="small-dot"></span> 収集機能は開発中</div></article>
+          <article class="device-card"><div class="device-top"><span class="device-symbol scale">▤</span><span class="badge pending" id="scale-state">未接続</span></div><p class="card-label">体重体組成計</p><h3>HBF-228T</h3><p class="device-desc">体重 · 体組成</p><div class="device-footer"><span class="small-dot"></span> BLE通信の実機検証待ち</div></article>
+        </div>
+        <div class="section-heading second"><div><span class="section-kicker">SYSTEM</span><h2>システムと更新</h2></div></div>
+        <section class="system-card"><div class="system-icon">↗</div><div class="system-main"><h3>QnapSelfCare</h3><p>インストール済み: <strong id="version">確認中…</strong> <span class="divider">·</span> CPU: <strong id="arch">確認中…</strong></p><p id="update-message" class="update-message" role="status">更新情報はボタンから確認できます。</p></div><button type="button" id="check-update">更新を確認 <span aria-hidden="true">→</span></button></section>
+        <footer>QnapSelfCare Preview <span>·</span> データ収集機能は今後のリリースで追加予定</footer>
+      </div>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

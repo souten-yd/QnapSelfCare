@@ -6,6 +6,8 @@ on:
       - 'tests/**'
       - 'qpkg/**'
       - 'scripts/**'
+      - 'web/**'
+      - 'webapp.py'
       - '.github/workflows/check.yml'
   push:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - 'tests/**'
       - 'qpkg/**'
       - 'scripts/**'
+      - 'web/**'
+      - 'webapp.py'
       - '.github/workflows/check.yml'
 permissions:
   contents: write
@@ -27,6 +31,8 @@ jobs:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
       - run: python -m py_compile updater.py
+      - run: python -m py_compile webapp.py
+      - run: sh -n qpkg/shared/selfcare.sh
       - name: Install pinned QDK
         run: |
           curl --fail --location --retry 3 --output /tmp/qdk.deb https://github.com/qnap-dev/QDK/releases/download/v2.5.3/qdk_2.5.3_amd64.deb
@@ -40,12 +46,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.1.0 >/dev/null 2>&1; then
-            echo 'Release v0.1.0 already exists; leaving it unchanged.'
+          if gh release view v0.2.0 >/dev/null 2>&1; then
+            echo 'Release v0.2.0 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.1.0 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.1.0 preview' \
-            --notes 'Preview QPKG: installs a command-line GitHub Release update checker. Requires Python 3 on the NAS. Measurement collection for HEM-6232T and HBF-228T is not implemented. No NAS hardware installation test has been performed.' \
+          gh release create v0.2.0 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.2.0 preview' \
+            --notes 'Preview QPKG: local web dashboard, App Center icon, release update checker. Requires Python 3 on the NAS. Read admin-token in the QPKG install directory for the dashboard password. The dashboard uses HTTP and should only be accessed on a trusted LAN. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
             --target "$GITHUB_SHA"
