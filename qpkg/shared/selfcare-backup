@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python=$(/bin/sh "$root/python3-path") || exit 1
+exec "$python" "$root/protection.py" "$@"

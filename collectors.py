@@ -13,6 +13,7 @@ import threading
 import time
 
 from storage import now
+from durability import write_json
 
 ROOT = Path(__file__).resolve().parent
 HOMEHUB_SOCKET = Path(os.environ.get("SELFCARE_HOMEHUB_SOCKET", "/share/Container/QnapHomeHub/data/radio/ble.sock"))
@@ -104,6 +105,7 @@ class CollectorManager:
         self.thread.join(timeout=3)
 
     def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub"):
+        self.store.require_available()
         if action not in ("scan", "pair", "sync"):
             raise ValueError("対応していない操作です")
         device = self.store.device(device_id) if device_id else None
@@ -146,11 +148,7 @@ class CollectorManager:
                 key = pending.get("key") if pending.get("address") == device["address"] else None
                 if not key:
                     key = secrets.token_hex(16)
-                    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as output:
-                        json.dump({"address": device["address"], "key": key}, output)
-                        output.flush()
-                        os.fsync(output.fileno())
+                    write_json(key_path, {"address": device["address"], "key": key})
                 request["key"] = key
             elif action == "sync":
                 request["key"] = self.store.pairing_key(device["address"])
@@ -213,6 +211,9 @@ class CollectorManager:
 
     def loop(self):
         while not self.stop_event.is_set():
+            if self.store.error:
+                self.stop_event.wait(2)
+                continue
             try:
                 item = self.queue.get(timeout=2)
             except queue.Empty:
@@ -222,19 +223,27 @@ class CollectorManager:
                     # A transient DB error must not permanently stop the worker.
                     self.stop_event.wait(5)
                 continue
-            self.process(item)
-            self.queue.task_done()
+            try:
+                self.store.require_available()
+                self.process(item)
+            except Exception as error:
+                self.watch_error = str(error)
+            finally:
+                self.queue.task_done()
 
     def diagnostics(self):
         root = self.store.directory.parent
         bridge = root / "run/ble.sock"
-        status = {"mode": "native", "bridge": False,
+        status = {"mode": "unavailable", "bridge": False,
                   "dbus": Path("/run/dbus/system_bus_socket").exists(),
                   "bleak": bool(importlib.util.find_spec("bleak")) or (root / "python/bleak").is_dir(),
-                  "worker_alive": self.thread.is_alive(), "data_path": str(self.store.path),
+                  "worker_alive": self.thread.is_alive(), "collection_paused": bool(self.store.error),
+                  "data_path": str(self.store.path),
                   "watch_error": self.watch_error,
                   "hardware_verified": False}
-        if HOMEHUB_SOCKET.exists():
+        devices = [] if self.store.error else self.store.devices()
+        shared = not devices or any(d['transport'] == 'homehub' for d in devices)
+        if shared:
             bridge = HOMEHUB_SOCKET
         if bridge.exists():
             try:
@@ -243,4 +252,17 @@ class CollectorManager:
                 status["bridge"] = True
             except (OSError, ValueError, http.client.HTTPException) as error:
                 status["bridge_error"] = str(error)
+        elif not shared:
+            status['mode'] = 'native'
+        status['expected_mode'] = 'homehub' if shared else 'direct'
+        status['socket_path'] = str(bridge)
+        status['guidance'] = []
+        if shared and not status['bridge']:
+            status['guidance'].append('共通Bluetoothサービスに接続できません。QnapHomeHub 0.3.0以降のradioサービスの稼働とソケットの共有・権限を確認してください。NAS本体へのPython BLE・D-Bus追加は不要です。')
+        elif status['mode'] == 'native' and not (status['dbus'] and status['bleak']):
+            status['guidance'].append('直接接続に必要なPython BLEまたはD-Busがありません。専用Bluetoothコンテナのセットアップを確認してください。')
+        if status.get('bluezError'):
+            status['guidance'].append('共通radioのBlueZ復帰に失敗しています。HomeHubのradioログを確認してください。')
+        if self.store.error:
+            status['guidance'].append('データ保護のため収集を停止しています。バックアップから復旧後、機器設定を確認してください。')
         return status

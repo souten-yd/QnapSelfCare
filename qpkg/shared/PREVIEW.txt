@@ -1,4 +1,4 @@
-QnapSelfCare 0.3.1
+QnapSelfCare 0.3.2
 
 Local health records, user/device settings, CSV import/export, JSON backup/restore.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
@@ -12,3 +12,9 @@ Settings > SelfCare update: check, then apply from the Web UI.
 The NAS downloads and verifies the QPKG, backs up data, installs and verifies restart.
 Upgrading from 0.3.0 requires one initial manual App Center install.
 Update logs/backups: /share/Container/QnapSelfCare/updates/. NAS self-update needs real-device validation.
+
+Verified periodic SQLite/config backups: every 7 days, 14 generations by default.
+Settings include integrity/disk/backup diagnostics, manual backup and archive verification.
+Corruption blocks writes and new collection while preserving recovery Web access.
+Offline recovery: selfcare-backup verify/restore; see docs/data-protection.md.
+Keep downloaded backups outside the NAS; shared radio bonding data needs a separate HomeHub backup.

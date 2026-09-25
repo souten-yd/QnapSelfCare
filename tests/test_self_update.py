@@ -178,6 +178,7 @@ class SelfUpdateTests(unittest.TestCase):
         install = self.root / 'install'
         install.mkdir()
         (install / 'updater.py').write_text('')
+        (install / 'durability.py').write_text('')
         # A harmless worker uses the same inherited lock and detached launch path.
         (install / 'self_update.py').write_text('''import json,os,pathlib,sys,time
 job=pathlib.Path(sys.argv[2]); fd=int(sys.argv[4]); os.fstat(fd)
