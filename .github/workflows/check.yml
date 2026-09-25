@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.11 >/dev/null 2>&1; then
-            echo 'Release v0.3.11 already exists; leaving it unchanged.'
+          if gh release view v0.3.12 >/dev/null 2>&1; then
+            echo 'Release v0.3.12 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.11 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.11' \
-            --notes 'Compact mobile navigation into five visible icon buttons and one row of user/theme controls. Accept both short and 24-byte device-info session acknowledgements while rejecting truncated frames. Shared Bluetooth fix requires HomeHub 0.3.4; protocol revision is 3.' \
+          gh release create v0.3.12 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.12' \
+            --notes 'Refine responsive layouts across the management UI. Mobile measurement records show every field and action without horizontal scrolling. Align device actions, collapse diagnostic controls, wrap long logs and paths, and make notifications dismissible without covering content. No HomeHub update required.' \
             --target "$GITHUB_SHA"
