@@ -1,6 +1,6 @@
-QnapSelfCare 0.3.5
+QnapSelfCare 0.3.6
 
-Local health records, user/device settings, CSV import/export, JSON backup/restore.
+Local health records, OMRON history transfer, personalized trend lines, wellness goals, food notes and AI coaching.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
 Use QnapHomeHub 0.3.0 shared USB radio service for the same dongle.
 HomeHub UI stays on 8787; the shared radio uses a Unix socket, no public port.

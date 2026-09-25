@@ -14,6 +14,8 @@ import uuid
 import threading
 
 from durability import (CorruptDatabase, DataUnavailable, check_database, corruption, write_json)
+import omron_csv
+import wellness
 
 MODELS = {"HEM-6232T": 2, "HBF-228T": 4}
 METRICS = {"systolic": (1, 350), "diastolic": (1, 250), "pulse": (1, 300),
@@ -125,6 +127,13 @@ class Store:
                     id TEXT PRIMARY KEY, device_id TEXT, action TEXT NOT NULL,
                     state TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT,
                     message TEXT NOT NULL DEFAULT '', result TEXT);
+                CREATE TABLE IF NOT EXISTS wellness_profiles(
+                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, config TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS meal_notes(
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL, note TEXT NOT NULL, calories REAL);
+                CREATE INDEX IF NOT EXISTS meal_notes_user_time ON meal_notes(user_id,created_at);
+                CREATE TABLE IF NOT EXISTS ai_settings(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
                 PRAGMA user_version=1;
             ''')
             db.execute("UPDATE jobs SET state='failed',finished_at=?,message=? WHERE state IN ('queued','running')",
@@ -176,6 +185,57 @@ class Store:
                 if identifier in json.loads(row[0])["bindings"].values():
                     raise ValueError("機器の利用者割当を先に解除してください")
             db.execute("DELETE FROM users WHERE id=?", (identifier,))
+
+    def wellness_profile(self, user_id):
+        with self.connect() as db:
+            if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+                raise ValueError('利用者が見つかりません')
+            row = db.execute('SELECT config FROM wellness_profiles WHERE user_id=?', (user_id,)).fetchone()
+            return wellness.validate(json.loads(row[0]) if row else {})
+
+    def save_wellness_profile(self, user_id, payload):
+        current = self.wellness_profile(user_id)
+        if not isinstance(payload, dict) or set(payload) - (set(wellness.DEFAULT) - {'plan_updated_at'}):
+            raise ValueError('健康設定の項目が不正です')
+        result = wellness.validate(dict(current, **payload))
+        if 'plan_text' in payload and result['plan_text'] != current['plan_text']:
+            result['plan_updated_at'] = now()
+        with self.connect() as db:
+            db.execute('INSERT INTO wellness_profiles VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET config=excluded.config',
+                       (user_id, json.dumps(result, ensure_ascii=False)))
+        return result
+
+    def meals(self, user_id, limit=100):
+        self.wellness_profile(user_id)
+        with self.connect() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM meal_notes WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ?', (user_id, limit))]
+
+    def add_meal(self, user_id, payload):
+        self.wellness_profile(user_id)
+        if not isinstance(payload, dict) or set(payload) - {'note', 'calories', 'created_at'}:
+            raise ValueError('食事記録の項目が不正です')
+        note = text(payload.get('note'), '食事メモ', 1000)
+        calories = wellness.number(payload.get('calories'), 0, 10000, '目安カロリー', True)
+        when = timestamp(payload.get('created_at') or now())
+        row = {'id': uuid.uuid4().hex, 'user_id': user_id, 'created_at': when,
+               'note': note, 'calories': calories}
+        with self.connect() as db:
+            db.execute('INSERT INTO meal_notes VALUES(:id,:user_id,:created_at,:note,:calories)', row)
+        return row
+
+    def delete_meal(self, user_id, meal_id):
+        self.wellness_profile(user_id)
+        with self.connect() as db:
+            if not db.execute('DELETE FROM meal_notes WHERE id=? AND user_id=?',
+                              (identifier(meal_id, '食事記録ID'), user_id)).rowcount:
+                raise ValueError('食事記録が見つかりません')
+
+    def wellness_summary(self, user_id):
+        profile = self.wellness_profile(user_id)
+        # The latest 2000 records suffice for current trends without exporting full history.
+        records = self.records(user_id=user_id, limit=2000)['records']
+        return wellness.summarize(profile, records, self.meals(user_id, 100))
 
     def devices(self):
         with self.connect() as db:
@@ -397,12 +457,57 @@ class Store:
                                 values=values, note=row.get("note") or ""))
         return self.add_records(records, "csv")
 
+    def omron_history(self, content, user_id, apply=False, preview_token=None):
+        """Preview or atomically add historical OMRON CSV measurements for one user."""
+        users = {u['id'] for u in self.users()}
+        if user_id not in users:
+            raise ValueError('取込先の利用者を選択してください')
+        kind, rows = omron_csv.parse(content, user_id)
+        token = hashlib.sha256((user_id + '\0' + content).encode()).hexdigest()
+        if apply and preview_token != token:
+            raise ValueError('ファイルまたは利用者が変更されました。取込前の確認をやり直してください')
+        normalized = []
+        for index, row in enumerate(rows, 2):
+            try:
+                normalized.append(self.validate_record(row, users, {}, 'omron_csv'))
+            except ValueError as error:
+                raise ValueError(f'CSV {index}行目: {error}') from None
+        seen = set()
+        inserted = 0
+        primary = ('systolic', 'diastolic', 'pulse') if kind == 'blood_pressure' else ('weight',)
+        with self.connect() as db:
+            for row in normalized:
+                fingerprint = row['fingerprint']
+                identity = (row['measured_at'], *(row['values'][key] for key in primary))
+                same = db.execute('SELECT values_json FROM measurements WHERE user_id=? AND kind=? AND measured_at=?',
+                                  (user_id, kind, row['measured_at'])).fetchall()
+                duplicate = identity in seen or bool(db.execute(
+                    'SELECT 1 FROM deleted_measurements WHERE fingerprint=?', (fingerprint,)).fetchone())
+                if not duplicate:
+                    duplicate = any(all(json.loads(existing[0]).get(key) == row['values'][key] for key in primary)
+                                    for existing in same)
+                seen.add(identity)
+                if duplicate:
+                    continue
+                if apply:
+                    inserted += self._insert(db, row)
+                else:
+                    inserted += 1
+        return {'kind': kind, 'model': omron_csv.MODELS[kind], 'total': len(rows),
+                'importable': inserted, 'duplicates': len(rows) - inserted,
+                'first': min(r['measured_at'] for r in normalized),
+                'last': max(r['measured_at'] for r in normalized), 'preview_token': token}
+
     def backup(self):
         with self.connect() as db:
             db.execute("BEGIN")
             return {"format": "QnapSelfCare", "schema": 1, "created_at": now(),
                     "users": [dict(r) for r in db.execute("SELECT * FROM users")],
                     "devices": [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")],
+                    "wellness_profiles": [dict(json.loads(r['config']), user_id=r['user_id'])
+                                          for r in db.execute('SELECT * FROM wellness_profiles')],
+                    "meal_notes": [dict(r) for r in db.execute('SELECT * FROM meal_notes')],
+                    "ai_settings": (json.loads(value[0]) if (value := db.execute('SELECT config FROM ai_settings WHERE id=1').fetchone()) else None),
                     "deleted": [r[0] for r in db.execute("SELECT fingerprint FROM deleted_measurements")],
                     "records": [self.unpack(r) for r in db.execute("SELECT * FROM measurements")]}
 
@@ -436,6 +541,23 @@ class Store:
                 if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
                     raise ValueError("削除記録の形式が不正です")
                 db.execute("INSERT OR IGNORE INTO deleted_measurements VALUES(?)", (fingerprint,))
+            for item in backup.get('wellness_profiles', []):
+                if not isinstance(item, dict) or item.get('user_id') not in user_ids:
+                    raise ValueError('健康設定の利用者が不正です')
+                value = wellness.validate({key: item[key] for key in item if key != 'user_id'})
+                db.execute('INSERT INTO wellness_profiles VALUES(?,?)',
+                           (item['user_id'], json.dumps(value, ensure_ascii=False)))
+            for item in backup.get('meal_notes', []):
+                if not isinstance(item, dict) or item.get('user_id') not in user_ids:
+                    raise ValueError('食事記録の利用者が不正です')
+                mid = identifier(item.get('id'), '食事記録ID')
+                meal = text(item.get('note'), '食事メモ', 1000)
+                calories = wellness.number(item.get('calories'), 0, 10000, '目安カロリー', True)
+                db.execute('INSERT INTO meal_notes VALUES(?,?,?,?,?)',
+                           (mid, item['user_id'], timestamp(item.get('created_at')), meal, calories))
+            if backup.get('ai_settings') is not None:
+                from wellness_ai import validate as validate_ai
+                db.execute('INSERT INTO ai_settings VALUES(1,?)', (json.dumps(validate_ai(backup['ai_settings'])),))
         return {"restored": len(records), "users": len(users), "devices": len(devices)}
 
     def pairing_key(self, address, key=None):
