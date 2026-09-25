@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.12 >/dev/null 2>&1; then
-            echo 'Release v0.3.12 already exists; leaving it unchanged.'
+          if gh release view v0.3.13 >/dev/null 2>&1; then
+            echo 'Release v0.3.13 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.12 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.12' \
-            --notes 'Refine responsive layouts across the management UI. Mobile measurement records show every field and action without horizontal scrolling. Align device actions, collapse diagnostic controls, wrap long logs and paths, and make notifications dismissible without covering content. No HomeHub update required.' \
+          gh release create v0.3.13 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.13' \
+            --notes 'Replace the dashboard count with BMI from the latest body record, falling back to weight and the selected user height. Explain HBF-228T short-touch data transfer versus long-press pairing and distinguish discovery failure from data-reading errors. Allow removal of paired device registrations while retaining measurement provenance and backup restore state. Block removal while jobs are active. Bluetooth protocol is unchanged; no HomeHub update required.' \
             --target "$GITHUB_SHA"

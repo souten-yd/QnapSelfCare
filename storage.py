@@ -237,9 +237,11 @@ class Store:
         records = self.records(user_id=user_id, limit=2000)['records']
         return wellness.summarize(profile, records, self.meals(user_id, 100))
 
-    def devices(self):
+    def devices(self, include_archived=False):
         with self.connect() as db:
             result = [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")]
+            if not include_archived:
+                result = [d for d in result if not d.get("archived", False)]
             for device in result:
                 device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
         return result
@@ -281,23 +283,36 @@ class Store:
         did = identifier(payload.get("id") or uuid.uuid4().hex, "機器ID")
         config = self.validate_device(payload, {u["id"] for u in self.users()})
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT config FROM devices WHERE id=?", (did,)).fetchone()
+            if old and json.loads(old[0]).get("archived"):
+                raise ValueError("削除済み機器です。新規登録してください")
             if old and db.execute("SELECT 1 FROM measurements WHERE device_id=?", (did,)).fetchone():
                 old_config = json.loads(old[0])
                 if (old_config["model"], old_config["address"]) != (config["model"], config["address"]):
                     raise ValueError("記録済み機器の型番・アドレスは変更できません。別の機器として登録してください")
             for row in db.execute("SELECT id, config FROM devices WHERE id != ?", (did,)):
-                if config["address"] and json.loads(row["config"])["address"] == config["address"]:
+                if config["address"] and not json.loads(row["config"]).get("archived") and json.loads(row["config"])["address"] == config["address"]:
                     raise ValueError("同じBluetoothアドレスが登録済みです")
             db.execute("INSERT INTO devices VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config",
                        (did, json.dumps(config)))
         return self.device(did)
 
     def delete_device(self, identifier):
+        # Archive the registration so measurement provenance and fingerprints survive.
         with self.connect() as db:
-            if db.execute("SELECT 1 FROM measurements WHERE device_id=?", (identifier,)).fetchone():
-                raise ValueError("記録のある機器は削除できません。自動同期をOFFにしてください")
-            db.execute("DELETE FROM devices WHERE id=?", (identifier,))
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT config FROM devices WHERE id=?", (identifier,)).fetchone()
+            if not row or json.loads(row[0]).get("archived"):
+                return
+            if db.execute("SELECT 1 FROM jobs WHERE device_id=? AND state IN ('queued','running')", (identifier,)).fetchone():
+                raise ValueError("この機器の処理中です。自動同期をOFFにして処理完了後に削除してください")
+            config = json.loads(row[0])
+            config.update(archived=True, auto_sync=False)
+            db.execute("UPDATE devices SET config=? WHERE id=?", (json.dumps(config), identifier))
+            db.execute("DELETE FROM pairing WHERE address=?", (config["address"],))
+            # The recovery key must not be reused if this registration is removed.
+            (self.directory.parent / "config" / ("pair-" + identifier + ".json")).unlink(missing_ok=True)
 
     def validate_record(self, record, users, devices, source):
         if not isinstance(record, dict):
@@ -406,7 +421,7 @@ class Store:
 
     def edit_record(self, identifier, payload):
         record = self.validate_record(payload, {u["id"] for u in self.users()},
-                                      {d["id"]: d for d in self.devices()}, "edited")
+                                      {d["id"]: d for d in self.devices(include_archived=True)}, "edited")
         with self.connect() as db:
             old = db.execute("SELECT * FROM measurements WHERE id=?", (identifier,)).fetchone()
             if not old:
@@ -530,6 +545,10 @@ class Store:
                 did = identifier(device.get("id"), "機器ID")
                 config = self.validate_device(device, user_ids)
                 config["auto_sync"] = False
+                if not isinstance(device.get("archived", False), bool):
+                    raise ValueError("削除済み機器の状態が不正です")
+                if device.get("archived"):
+                    config["archived"] = True
                 db.execute("INSERT INTO devices VALUES(?,?)", (did, json.dumps(config)))
                 device_map[did] = config
             for record in records:
@@ -574,6 +593,11 @@ class Store:
     def create_job(self, device_id, action):
         identifier = uuid.uuid4().hex
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if device_id:
+                device = db.execute("SELECT config FROM devices WHERE id=?", (device_id,)).fetchone()
+                if not device or json.loads(device[0]).get("archived"):
+                    raise ValueError("機器が未登録または削除済みです")
             db.execute("INSERT INTO jobs(id,device_id,action,state,created_at) VALUES(?,?,?,'queued',?)",
                        (identifier, device_id, action, now()))
             db.execute("DELETE FROM jobs WHERE state NOT IN ('queued','running') AND id NOT IN (SELECT id FROM jobs ORDER BY created_at DESC,rowid DESC LIMIT 200)")
