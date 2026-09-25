@@ -1,4 +1,4 @@
-QnapSelfCare 0.3.8
+QnapSelfCare 0.3.9
 
 Local health records, OMRON history transfer, personalized trend lines, wellness goals, food notes and AI coaching.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.

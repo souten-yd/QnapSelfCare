@@ -46,7 +46,7 @@ jobs:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: npm test
-      - run: node --check web/app.js && node --check web/wellness.js && node --check web/update.js && node --check web/protection.js && node --check web/migration.js
+      - run: node --check web/theme.js && node --check web/app.js && node --check web/wellness.js && node --check web/update.js && node --check web/protection.js && node --check web/migration.js
       - run: python -m py_compile webapp.py
       - run: docker compose --project-directory homehub -f homehub/compose-shared.yaml config --quiet
       - run: docker compose --project-directory homehub -f homehub/compose-legacy.yaml config --quiet
@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.8 >/dev/null 2>&1; then
-            echo 'Release v0.3.8 already exists; leaving it unchanged.'
+          if gh release view v0.3.9 >/dev/null 2>&1; then
+            echo 'Release v0.3.9 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.8 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.8' \
-            --notes 'Show the last eight Bluetooth device responses with command, raw frame and parse result, including pairing status and timeout fragments, for opt-in diagnostics. Shared radio requires QnapHomeHub 0.3.2; automatic sync is unchanged.' \
+          gh release create v0.3.9 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.9' \
+            --notes 'Add system, light and night appearance modes with browser-local persistence. Theme covers forms, diagnostics, tables and chart colors. Bluetooth behavior is unchanged; no HomeHub update is required for the theme.' \
             --target "$GITHUB_SHA"
