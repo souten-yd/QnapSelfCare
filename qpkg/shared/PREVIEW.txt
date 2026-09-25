@@ -1,4 +1,4 @@
-QnapSelfCare 0.3.2
+QnapSelfCare 0.3.3
 
 Local health records, user/device settings, CSV import/export, JSON backup/restore.
 UI: http://<NAS-IP>:17863/ (no login). Data: /share/Container/QnapSelfCare.
@@ -18,3 +18,7 @@ Settings include integrity/disk/backup diagnostics, manual backup and archive ve
 Corruption blocks writes and new collection while preserving recovery Web access.
 Offline recovery: selfcare-backup verify/restore; see docs/data-protection.md.
 Keep downloaded backups outside the NAS; shared radio bonding data needs a separate HomeHub backup.
+
+Settings > Shared Bluetooth setup migrates standard HomeHub Compose deployments.
+Preserves settings, checks health and offers recovery; see docs/homehub-migration.md.
+Backup waits and retries while an update or migration holds the lock.

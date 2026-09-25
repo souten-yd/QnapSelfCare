@@ -19,7 +19,9 @@ SelfCareの利用頻度が高いため、通常はコンテナ内の新しいBlu
 
 ## HomeHub 0.2.xから初回移行
 
-これは新しいComposeサービスの追加を伴うため、既存のWeb更新でイメージを更新するだけでは完了しません。NASのSSHで実施します。既存の `data/`・`secrets/` と現在の `compose.yaml` をバックアップしてください。
+SelfCare 0.3.3以降では「設定・バックアップ → 共通Bluetoothのセットアップ → 共通Bluetooth構成へ更新」から標準構成を移行できます。[移行機能の詳細](homehub-migration.md)を参照してください。HomeHub側の従来の更新ボタンだけではComposeサービスは追加されません。
+
+以下はSSHで実施する場合の手順です。既存の `data/`・`secrets/` と現在の `compose.yaml` をバックアップしてください。
 
 1. `cd /share/Container/QnapHomeHub` で旧HomeHubを停止します。
 

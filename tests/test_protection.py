@@ -110,6 +110,9 @@ class ProtectionTests(unittest.TestCase):
             self.assertIsNone(self.manager.run_backup())
         with file_lock(self.root / 'updates/update.lock'):
             self.assertIsNone(self.manager.run_backup())
+            self.assertEqual(self.manager.status()['phase'], 'waiting')
+            self.assertIsNone(self.manager.status()['error'])
+            self.assertGreater(self.manager.status()['next_at'], time.time() + 50)
         self.assertEqual(archive.read_bytes(), original)
 
     def test_corrupt_source_protected_across_restart_and_recoverable(self):

@@ -19,9 +19,10 @@ from collectors import CollectorManager
 from storage import CSV_FIELDS, Store, integer
 from durability import DataUnavailable, file_lock
 from protection import ProtectionManager
+from homehub_migration import MigrationManager
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -86,6 +87,7 @@ class Handler(BaseHTTPRequestHandler):
         static = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                  "/migration.js": ("migration.js", "text/javascript; charset=utf-8"),
                   "/protection.js": ("protection.js", "text/javascript; charset=utf-8"),
                   "/update.js": ("update.js", "text/javascript; charset=utf-8"),
                   "/icon.svg": ("icon.svg", "image/svg+xml")}
@@ -114,6 +116,8 @@ class Handler(BaseHTTPRequestHandler):
             result = self.server.protection.diagnostics()
             result.update(self.server.collector.diagnostics())
             self._json(200, result)
+        elif path == "/api/homehub-migration":
+            self._json(200, self.server.migration.status())
         elif path == "/api/protection":
             self._json(200, self.server.protection.status())
         elif path == "/api/protection/download":
@@ -168,7 +172,12 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             path = urlsplit(self.path).path
             if method == "POST":
-                if path == "/api/protection/settings":
+                if path == "/api/homehub-migration":
+                    if set(body) != {'action'}:
+                        raise ValueError('actionのみ指定してください')
+                    self._json(202, self.server.migration.apply(body['action']))
+                    return
+                elif path == "/api/protection/settings":
                     self._json(200, self.server.protection.save_settings(body))
                     return
                 elif path == "/api/protection/backup":
@@ -243,6 +252,7 @@ def serve(args):
     protection = ProtectionManager(store)
     with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
         server.store, server.collector, server.protection = store, collector, protection
+        server.migration = MigrationManager(args.data_dir)
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()
         protection.start()

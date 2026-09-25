@@ -16,7 +16,7 @@ import time
 import uuid
 import zipfile
 
-from durability import (CorruptDatabase, DataUnavailable, check_database, file_lock,
+from durability import (CorruptDatabase, DataUnavailable, ResourceBusy, check_database, file_lock,
                         snapshot, sync_dir, write_json)
 
 DEFAULTS = {'enabled': True, 'interval_hours': 168, 'keep': 14}
@@ -132,7 +132,7 @@ class ProtectionManager:
             self.config_error = 'バックアップ設定を読めません。設定を保存し直してください: ' + str(error)
         try:
             self.state = read_object(self.state_path)
-            for key in ('last_success', 'last_attempt'):
+            for key in ('last_success', 'last_attempt', 'retry_at'):
                 value = self.state.get(key, 0)
                 if type(value) not in (int, float) or not 0 <= value < 10**11:
                     raise ValueError('バックアップ日時が不正です')
@@ -187,7 +187,7 @@ class ProtectionManager:
             # A completed archive remains discoverable if power failed before status.json was replaced.
             last = max([0] + [b['created_at'] for b in backups if b['readable']])
             interval = self.config['interval_hours'] * 3600
-            next_at = max(last + interval if last <= time.time() else 0,
+            next_at = max(last + interval if last <= time.time() else 0, self.state.get('retry_at', 0),
                           self.state.get('last_attempt', 0) + 3600 if self.state.get('error') else 0)
             return {'settings': self.config, 'config_error': self.config_error,
                     'busy': self.busy, 'phase': self.state.get('phase', 'idle'),
@@ -264,7 +264,7 @@ class ProtectionManager:
         try:
             with self.lock:
                 self.busy = True
-                self.state.update(phase='running', last_attempt=time.time(), error=None, warning=None)
+                self.state.update(phase='running', last_attempt=time.time(), error=None, warning=None, retry_at=0)
             write_json(self.state_path, self.state)
             self.store.require_available()
             with file_lock(self.directory / 'backup.lock'), file_lock(self.root / 'updates/update.lock'):
@@ -277,6 +277,11 @@ class ProtectionManager:
                 except Exception as error:
                     self.state['warning'] = 'バックアップは保存済みですが世代整理を保留しました: ' + str(error)
                 return name
+        except ResourceBusy:
+            with self.lock:
+                self.state.update(phase='waiting', error=None, retry_at=time.time() + 60,
+                                  warning='更新・移行処理の完了を待っています。約1分後に自動再試行します')
+            return None
         except Exception as error:
             if isinstance(error, CorruptDatabase):
                 # A damaged destination/archive must not mislabel a healthy live DB.
@@ -412,7 +417,8 @@ class ProtectionManager:
         if any(not b['readable'] for b in status['backups']):
             add('archive', 'バックアップファイル', 'error', '読めない保存世代があります。自動削除せず保持しています')
         if status['warning']:
-            add('retention', '世代整理', 'warning', status['warning'])
+            add('waiting' if status['phase'] == 'waiting' else 'retention',
+                'バックアップ待機' if status['phase'] == 'waiting' else '世代整理', 'warning', status['warning'])
         verification = status['verification']
         if verification:
             add('verification', '保存世代の再検査', 'ok' if verification['ok'] else 'error',
