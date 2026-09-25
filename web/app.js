@@ -8,6 +8,7 @@ async function getJSON(path) {
 getJSON('/api/status').then(data => {
   document.getElementById('version').textContent = data.version;
   document.getElementById('arch').textContent = data.architecture || '未対応';
+  document.getElementById('bluetooth').textContent = data.bluetooth_adapters.length ? data.bluetooth_adapters.join(', ') : '未検出';
   document.getElementById('bp-state').textContent = data.devices['HEM-6232T'];
   document.getElementById('scale-state').textContent = data.devices['HBF-228T'];
 }).catch(() => { statusMessage.textContent = 'システム状態を取得できませんでした。'; });

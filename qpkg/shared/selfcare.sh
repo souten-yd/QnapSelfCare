@@ -9,7 +9,6 @@ else
 fi
 [ -n "$root" ] || { echo 'QPKG installation path missing' >&2; exit 1; }
 pidfile="$root/selfcare.pid"
-tokenfile="$root/admin-token"
 
 running() {
     [ -f "$pidfile" ] || return 1
@@ -29,11 +28,8 @@ case "${1:-}" in
         command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required' >&2; exit 1; }
         running && exit 0
         umask 077
-        if [ ! -f "$tokenfile" ]; then
-            python3 -c 'import secrets,sys; print(secrets.token_urlsafe(32))' > "$tokenfile"
-        fi
-        chmod 600 "$tokenfile"
-        nohup python3 "$root/webapp.py" --host 0.0.0.0 --port 17863 --token-file "$tokenfile" > "$root/selfcare.log" 2>&1 &
+        rm -f "$root/admin-token"
+        nohup python3 "$root/webapp.py" --host 127.0.0.1 --port 17863 > "$root/selfcare.log" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
         running || { rm -f "$pidfile"; echo 'Web UI failed to start; check selfcare.log' >&2; exit 1; }
