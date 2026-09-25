@@ -606,4 +606,4 @@ class Store:
     def update_job(self, identifier, state, message="", result=None):
         with self.connect() as db:
             db.execute("UPDATE jobs SET state=?,finished_at=?,message=?,result=? WHERE id=?",
-                       (state, now() if state in ("done", "failed") else None, message[:2000], json.dumps(result) if result is not None else None, identifier))
+                       (state, now() if state in ("done", "failed", "skipped") else None, message[:2000], json.dumps(result) if result is not None else None, identifier))

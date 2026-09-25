@@ -26,6 +26,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent.includes('1件保存'));
  await until(()=>d.getElementById('history').textContent.includes('最高血圧 130'));
  assert.match(d.getElementById('latest-bp').textContent,/130 \/ 80/);
+ d.getElementById('history').querySelector('.record-controls').open=true;
  d.getElementById('history').querySelector('button').click();form.elements.pulse.value='74';submit('record-form');
  await until(()=>d.getElementById('message').textContent==='記録を更新しました');
  await until(()=>d.getElementById('history').textContent.includes('脈拍 74'));

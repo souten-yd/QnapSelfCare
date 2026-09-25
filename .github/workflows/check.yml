@@ -72,5 +72,5 @@ jobs:
           sha256sum dist/*.qpkg > dist/SHA256SUMS
           gh release create v0.3.13 dist/*.qpkg dist/SHA256SUMS \
             --title 'QnapSelfCare 0.3.13' \
-            --notes 'Replace the dashboard count with BMI from the latest body record, falling back to weight and the selected user height. Explain HBF-228T short-touch data transfer versus long-press pairing and distinguish discovery failure from data-reading errors. Allow removal of paired device registrations while retaining measurement provenance and backup restore state. Block removal while jobs are active. Bluetooth protocol is unchanged; no HomeHub update required.' \
+            --notes 'Replace the dashboard count with BMI from the latest body record, falling back to weight and the selected user height. Explain HBF-228T short-touch data transfer versus long-press pairing and distinguish discovery failure from data-reading errors. Allow removal of paired device registrations while retaining measurement provenance and backup restore state. Block removal while jobs are active. Compact record entries with expandable details and actions. Automatic sync searches once per configured interval and skips unavailable devices. Bluetooth protocol is unchanged; no HomeHub update required.' \
             --target "$GITHUB_SHA"
