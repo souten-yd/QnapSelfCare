@@ -31,11 +31,11 @@ QPKGはQDKでビルドし、NASのCPUアーキテクチャごとにRelease asset
 
 ## Web管理画面
 
-0.2.3 QPKGをApp Centerでインストールして有効化すると、管理画面が `http://<NASのLAN IPv4>:17863/` で起動します。App Centerの「開く」からもアクセスできます。ログインやSSHポート転送は不要です。サーバーはIPv4の全インターフェースで待ち受け、接続元のサブネットによる制限は行いません。
+0.2.3 QPKGをApp Centerでインストールして有効化すると、管理画面が `http://<NASのLAN IPv4>:17863/` で起動します。App Centerの「開く」からもアクセスできます。ログインやSSHポート転送は不要です。サーバーはNASのLAN IPv4、localhost、割り当てられていればtailscale0のIPv4で待ち受けます。接続元のサブネットによる制限は行いません。LANアドレスを特定できないときはサービスログに原因を記録して起動を止めます。
 
 ### Tailscale経由で開く
 
-- NASにTailscaleをインストール済み: iPhoneでも同じtailnetに接続して `http://<NASのTailscale IPv4>:17863/` を開きます。NASのTailscale IPはNAS側の `tailscale ip -4` で確認できます。
+- NASにTailscaleをインストール済み: iPhoneでも同じtailnetに接続します。NASに `tailscale0` インターフェースがある場合は `http://<NASのTailscale IPv4>:17863/` を開きます。NASのTailscale IPはNAS側の `tailscale ip -4` で確認できます。QNAPのTailscaleがユーザー空間ネットワーク方式で動いている場合は、下記のTailscale Serve経由でアクセスします。
 - 別の機器がNASのLANに向けてTailscaleサブネットルートを配信している: iPhoneでTailscaleを有効にし、ルートが利用できれば `http://192.168.68.57:17863/` を開きます。LANのアドレスが変わった場合は実際のNASのIPv4に置き換えてください。
 - NAS上でTailscale Serveを使う場合: `tailscale serve status` で既存設定を確認してから `tailscale serve --bg 17863` を実行し、コマンドが表示するtailnet内のHTTPS URLを開きます。既存の443番Serve設定を使っている場合はその設定に合わせてください。Serveを使わなくても上記のHTTP接続で利用できます。
 

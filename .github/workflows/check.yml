@@ -53,5 +53,5 @@ jobs:
           sha256sum dist/*.qpkg > dist/SHA256SUMS
           gh release create v0.2.3 dist/*.qpkg dist/SHA256SUMS \
             --title 'QnapSelfCare 0.2.3 preview' \
-            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard listens on all IPv4 interfaces and accepts connections routed over the LAN or Tailscale; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
+            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard listens on the NAS LAN, loopback and assigned tailscale0 IPv4, and accepts connections routed over the LAN or Tailscale; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
             --target "$GITHUB_SHA"

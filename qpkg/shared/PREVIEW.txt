@@ -5,9 +5,11 @@ HEM-6232T and HBF-228T measurement collection is not implemented.
 Python 3 is required for the web server and update checker; it is not bundled.
 
 The read-only preview does not require a login. Open it from App Center,
-visit http://<NAS-LAN-IP>:17863/, or, with Tailscale on the NAS, visit
+visit http://<NAS-LAN-IP>:17863/, or, with a tailscale0 interface on the NAS, visit
 http://<NAS-TAILSCALE-IP>:17863/. A subnet router can also route to the LAN IP.
-The server listens on all IPv4 interfaces and does not filter client IPs.
+For userspace Tailscale, run tailscale serve --bg 17863 to serve localhost.
+The server listens only on the LAN, loopback, and assigned tailscale0 IPv4
+addresses; it does not filter client IPs.
 Only devices allowed by the NAS network and tailnet can reach it.
 Do not forward port 17863 to the public Internet.
 
