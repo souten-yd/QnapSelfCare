@@ -41,17 +41,17 @@ jobs:
           sudo apt-get install -y /tmp/qdk.deb rsync
       - run: bash scripts/build-qpkg.sh x86_64 "$PWD/dist"
       - run: bash scripts/build-qpkg.sh arm_64 "$PWD/dist"
-      - name: Publish first preview release
+      - name: Publish preview release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.2.2 >/dev/null 2>&1; then
-            echo 'Release v0.2.2 already exists; leaving it unchanged.'
+          if gh release view v0.2.3 >/dev/null 2>&1; then
+            echo 'Release v0.2.3 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.2.2 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.2.2 preview' \
-            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard binds only to the private LAN IPv4 and accepts the interface subnet; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
+          gh release create v0.2.3 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.2.3 preview' \
+            --notes 'Preview QPKG: read-only web dashboard without login, App Center icon and release update checker. Requires Python 3 on the NAS. The dashboard listens on the NAS LAN, loopback and assigned tailscale0 IPv4, and accepts connections routed over the LAN or Tailscale; do not forward port 17863 to the Internet. Measurement collection for HEM-6232T and HBF-228T is not implemented. NAS hardware installation has not been tested.' \
             --target "$GITHUB_SHA"

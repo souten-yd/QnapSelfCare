@@ -1,10 +1,10 @@
 from http.server import ThreadingHTTPServer
 import json
-import ipaddress
 import threading
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -53,18 +53,22 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(webapp.bluetooth_adapters(root), ["hci0", "hci1"])
             self.assertEqual(webapp.bluetooth_adapters(root / "missing"), [])
 
-    def test_only_same_private_subnet_can_read(self):
-        self.assertEqual(webapp.private_subnet("192.168.20.5", "255.255.255.0"),
-                         ipaddress.ip_network("192.168.20.0/24"))
-        with self.assertRaises(ValueError):
-            webapp.private_subnet("10.0.0.5", "254.0.0.0")
-        self.server.lan_network = ipaddress.ip_network("192.168.20.0/24")
-        try:
-            with self.assertRaises(HTTPError) as denied:
-                self.request("/api/status")
-            self.assertEqual(denied.exception.code, 403)
-        finally:
-            self.server.lan_network = None
+    def test_no_source_subnet_filter(self):
+        # No source-network setting is required for the status endpoint.
+        with self.request("/api/status") as response:
+            self.assertEqual(response.status, 200)
+
+    def test_listen_addresses_are_explicit(self):
+        class Route:
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def connect(self, *_): pass
+            def getsockname(self): return ("192.168.68.57", 0)
+        with patch.object(webapp.socket, "socket", return_value=Route()), \
+             patch.object(webapp.socket, "if_nameindex", return_value=[(1, "eth0"), (2, "tailscale0")]), \
+             patch.object(webapp, "interface_ipv4", return_value="100.101.102.103"):
+            self.assertEqual(webapp.listen_addresses(),
+                             ["192.168.68.57", "127.0.0.1", "100.101.102.103"])
 
 
 if __name__ == "__main__":
