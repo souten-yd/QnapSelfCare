@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.14"
+VERSION = "0.3.15"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -107,9 +107,9 @@ class Handler(BaseHTTPRequestHandler):
                              "data_path": str(self.store.path)})
         elif path == "/api/users":
             self._json(200, self.store.users())
-        elif path in ('/api/wellness/profile', '/api/wellness/summary', '/api/wellness/meals'):
+        elif path in ('/api/wellness/profile', '/api/wellness/summary', '/api/wellness/meals', '/api/wellness/energy'):
             user_id = query.get('user_id', [''])[0]
-            self._json(200, {'/api/wellness/profile': self.store.wellness_profile,
+            self._json(200, {'/api/wellness/energy': self.store.energy_report, '/api/wellness/profile': self.store.wellness_profile,
                              '/api/wellness/summary': self.store.wellness_summary,
                              '/api/wellness/meals': self.store.meals}[path](user_id))
         elif path == '/api/ai/settings':
@@ -214,6 +214,11 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) != {'user_id', 'profile'}:
                         raise ValueError('利用者と健康設定を指定してください')
                     result = self.store.save_wellness_profile(body['user_id'], body['profile'])
+                elif path in ('/api/wellness/activity', '/api/wellness/weight-plan'):
+                    if set(body) != {'user_id', 'entry'}:
+                        raise ValueError('利用者と記録を指定してください')
+                    handler = self.store.save_activity if path.endswith('activity') else self.store.save_weight_plan
+                    result = handler(body['user_id'], body['entry'])
                 elif path == '/api/wellness/meals':
                     if set(body) != {'user_id', 'meal'}:
                         raise ValueError('利用者と食事記録を指定してください')
@@ -251,6 +256,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(405, {"error": "対応していない操作です"})
                     return
             else:
+                if path == '/api/wellness/activity':
+                    if set(body) != {'user_id', 'date'}:
+                        raise ValueError('利用者と日付を指定してください')
+                    self.store.delete_activity(body['user_id'], body['date'])
+                    self._json(200, {'deleted': True})
+                    return
                 if path == '/api/wellness/meals':
                     if set(body) != {'user_id', 'id'}:
                         raise ValueError('利用者と食事記録を指定してください')

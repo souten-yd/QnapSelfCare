@@ -113,6 +113,12 @@ class Coach:
                    'estimated_bmr_kcal', 'weight_change_7d_kg', 'weekly_change_needed_kg', 'notices')},
                    'goal': {'weight_kg': profile['goal_weight_kg'], 'date': profile['goal_date']},
                    'saved_plan': profile['plan_text'][:3000], 'recent_meals': recent_meals}
+        activity = self.store.energy_report(user_id)
+        context['energy'] = activity['current']
+        context['recent_activity'] = activity['diaries'][-7:]
+        context['weekly_review'] = [w for w in activity['weeks'] if not w['future']][-4:]
+        context['energy_notices'] = activity['notices']
+        context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)
         prompt = {'model': config['model'], 'stream': False, 'max_tokens': 600,
                   'messages': [{'role': 'system', 'content':
                       'あなたは健康記録・食事・減量計画の整理を支援します。診断、治療、薬の変更や断定的なカロリー処方はしません。'

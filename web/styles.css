@@ -128,3 +128,7 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
  #wellness-form .form-grid:first-child>label:nth-child(3){grid-column:1/-1}
  #wellness-form p{font-size:12px;margin:8px 0}
 }
+
+.energy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.energy-grid>*{min-width:0}.energy-grid input,.energy-grid select{width:100%;min-width:0;font-size:16px;padding:8px;min-height:44px}.energy-panel label{font-size:13px}.energy-panel p{font-size:13px}.energy-panel details{margin:12px 0}.energy-panel svg{display:block;width:100%;height:auto}.energy-legend{display:flex;flex-wrap:wrap;gap:8px;font-size:12px}.energy-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.energy-stats div{display:flex;flex-direction:column;gap:6px;min-width:0}.energy-stats span{font-size:12px}.energy-stats strong{font-size:clamp(14px,3vw,22px);overflow-wrap:anywhere}.energy-log{display:grid;gap:6px;padding:12px 0;border-bottom:1px solid var(--border);font-size:13px;overflow-wrap:anywhere}.energy-week{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}.energy-panel .row{gap:8px;flex-wrap:wrap}.energy-panel button{padding:8px 12px;font-size:13px;min-height:44px}
+
+:root{--energy-intake:#8a479e;--energy-target:#286ba3}:root[data-theme=dark]{--energy-intake:#cb9fdb;--energy-target:#80b9e8}
