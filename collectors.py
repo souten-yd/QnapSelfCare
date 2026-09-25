@@ -101,6 +101,8 @@ class CollectorManager:
         self.listen_error = None
         self.listen_ready = False
         self.listen_seen = {}
+        self.listen_delayed = {}
+        self.listen_jobs = {}
         self.scan_group = 0
         self.watch_error = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
@@ -115,7 +117,7 @@ class CollectorManager:
                 process.terminate()
         self.thread.join(timeout=3)
 
-    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False, automatic=False):
+    def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False, automatic=False, watch_ticket=None):
         self.store.require_available()
         if not isinstance(diagnostic, bool) or (diagnostic and action not in ('pair', 'sync')):
             raise ValueError('詳細診断は手動のペアリング・履歴同期でのみ使用できます')
@@ -143,7 +145,14 @@ class CollectorManager:
         with self.lock:
             if pending_key in self.pending or self.queue.full():
                 raise ValueError("同じ機器の処理が実行中、または待機中です")
+            if watch_ticket is not None:
+                if self.listen_delayed.get(pending_key) is not watch_ticket or self.listen_signature(device) != watch_ticket['signature']:
+                    raise ValueError('待ち受け予約は取り消されました')
             identifier = self.store.create_job(device_id, action)
+            if watch_ticket is not None:
+                self.listen_jobs[identifier] = watch_ticket
+            # A manual operation takes precedence over a delayed automatic request.
+            self.listen_delayed.pop(pending_key, None)
             self.pending.add(pending_key)
             self.queue.put_nowait((identifier, pending_key, action, device, adapter, transport, diagnostic, automatic))
         return {"id": identifier, "state": "queued"}
@@ -152,7 +161,15 @@ class CollectorManager:
         identifier, pending_key, action, device, adapter, transport, diagnostic, automatic = item
         self.store.update_job(identifier, "running", "Bluetooth処理を実行しています")
         trace = None
+        with self.lock:
+            watch_ticket = self.listen_jobs.pop(identifier, None)
         try:
+            if watch_ticket is not None:
+                current = self.store.device(device['id'])
+                if self.listen_signature(current) != watch_ticket['signature']:
+                    self.store.update_job(identifier, 'skipped', '待ち受け設定の変更または機器削除により予約を取り消しました')
+                    return
+                device = current
             request = {"action": action, "device": device, "adapter": adapter, "transport": transport}
             if diagnostic:
                 request['diagnostic'] = True
@@ -188,6 +205,8 @@ class CollectorManager:
             else:
                 result = dict(result, adapter=adapter, transport=transport)
                 message = f"{len(result.get('devices', []))}台検出しました"
+            if watch_ticket is not None:
+                message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
             self.store.update_job(identifier, "done", message, result)
         except Exception as error:
             trace = getattr(error, 'diagnostic', None) or trace
@@ -200,14 +219,47 @@ class CollectorManager:
                 trace = None
             missing = str(error) == "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
             skipped = automatic and action == "sync" and missing
-            self.store.update_job(identifier, "skipped" if skipped else "failed",
-                                  "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__,
+            message = "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__
+            if watch_ticket is not None:
+                retry = False
+                if watch_ticket['attempt'] == 1 and not self.stop_event.is_set() and not self.store.error:
+                    current = self.store.device(device['id'])
+                    if self.listen_signature(current) == watch_ticket['signature']:
+                        with self.lock:
+                            self.listen_delayed[device['id']] = dict(watch_ticket, attempt=2, due=time.monotonic()+60)
+                        retry = True
+                if skipped:
+                    message = '機器が通信可能でないためスキップしました'
+                message += '。60秒後に1回だけ再試行を予約しました' if retry else '。今回の待ち受け同期を終了し、次の検知を待ちます'
+            self.store.update_job(identifier, "skipped" if skipped else "failed", message,
                                   {'diagnostic': trace} if trace else None)
         finally:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
                 self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
+
+    @staticmethod
+    def listen_signature(device):
+        if not device or not (device['auto_sync'] and device['paired'] and device['bindings']
+                and device.get('sync_mode') == 'listen' and device['transport'] == 'homehub'):
+            return None
+        return json.dumps({k: device[k] for k in ('address', 'adapter', 'model', 'bindings', 'transport')}, sort_keys=True)
+
+    def dispatch_listen(self):
+        # Timers never hold the Bluetooth adapter or sleep the worker thread.
+        devices = {d['id']: d for d in self.store.devices()}
+        with self.lock:
+            for did, ticket in list(self.listen_delayed.items()):
+                if self.listen_signature(devices.get(did)) != ticket['signature']:
+                    self.listen_delayed.pop(did, None)
+            due = [(did, ticket) for did, ticket in self.listen_delayed.items() if ticket['due'] <= time.monotonic()]
+        for did, ticket in due:
+            try:
+                self.submit('sync', did, automatic=True, watch_ticket=ticket)
+            except ValueError:
+                # Busy queue is retried without resetting the 60-second timer.
+                pass
 
     def listen(self):
         if time.monotonic() < self.next_watch:
@@ -237,20 +289,21 @@ class CollectorManager:
                 event = events.get(device['address'])
                 if event is None or event <= self.listen_seen.get(device['id'], 0):
                     continue
-                if time.monotonic() < self.next_attempt.get(device['id'], 0):
-                    continue
-                try:
-                    self.submit('sync', device['id'], automatic=True)
-                    self.listen_seen[device['id']] = event
-                    self.next_attempt[device['id']] = time.monotonic() + device['interval']
-                except ValueError:
-                    pass
+                # Consume newer advertisements during waiting/cooldown; never extend a reservation.
+                self.listen_seen[device['id']] = event
+                with self.lock:
+                    if (device['id'] in self.listen_delayed or device['id'] in self.pending
+                            or time.monotonic() < self.next_attempt.get(device['id'], 0)):
+                        continue
+                    self.listen_delayed[device['id']] = {'due': time.monotonic()+60, 'attempt': 1,
+                                                        'signature': self.listen_signature(device)}
         except Exception as error:
             self.listen_ready = False
             self.listen_error = '待ち受けに接続できません。HomeHub 0.3.5以降を確認してください: ' + str(error)
             self.next_watch = time.monotonic() + 10
 
     def schedule(self):
+        self.dispatch_listen()
         self.listen()
         if time.monotonic() < self.next_scan:
             return
@@ -318,8 +371,13 @@ class CollectorManager:
                 self.queue.task_done()
 
     def listener_status(self):
+        with self.lock:
+            waiting = [{'device_id': did, 'attempt': ticket['attempt'],
+                        'seconds': max(0, int(ticket['due'] - time.monotonic() + 0.999))}
+                       for did, ticket in self.listen_delayed.items()]
+            busy = bool(self.pending)
         return {'ready': self.listen_ready, 'error': self.listen_error,
-                'configured': self.watch_configured, 'busy': bool(self.pending)}
+                'configured': self.watch_configured, 'busy': busy, 'waiting': waiting}
 
     def diagnostics(self):
         root = self.store.directory.parent
