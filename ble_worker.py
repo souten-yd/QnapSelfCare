@@ -25,11 +25,28 @@ class Session:
             del responses[:-8]
 
     async def subscribe(self):
-        await self.client.start_notify(protocol.UNLOCK, lambda _, data: self.unlocks.put_nowait(bytes(data)))
+        # Classic cuffs prime their security/notification state on RX before
+        # the unlock subscription. Let BlueZ and the peripheral settle.
         for index, char in enumerate(protocol.RX):
             await self.client.start_notify(char, lambda _, data, i=index: self.notify(i, bytes(data)))
+        await asyncio.sleep(0.75)
+        await self.client.start_notify(protocol.UNLOCK, lambda _, data: self.unlocks.put_nowait(bytes(data)))
+        await asyncio.sleep(0.75)
+
+    async def pair(self, key, model):
+        await self.unlock(2, bytes(16), 0x82)
+        await self.unlock(0, key, 0x80)
+        await asyncio.sleep(1)
+        # HEM's key-programming ACK confirms storage, not authentication for
+        # the memory session. Authenticate the same key before opening it.
+        if model == 'HEM-6232T':
+            await self.unlock(1, key, 0x81)
+        await self.request(0, length=16)
+        await self.request(15)
 
     def notify(self, channel, data):
+        if self.trace is not None:
+            self.trace['rx_notifications'] = self.trace.get('rx_notifications', 0) + 1
         self.channels[channel] = data
         first = self.channels.get(0)
         if not first:
@@ -70,23 +87,43 @@ class Session:
         if self.trace is not None:
             self.trace['stage'] = 'read' if opcode == 1 else 'session'
             self.trace['last_command'] = {'opcode': opcode, 'address': address, 'length': length}
-        self.channels.clear()
-        while not self.frames.empty():
-            self.frames.get_nowait()
         packet = protocol.command(opcode, address, length)
-        await self.client.write_gatt_char(protocol.TX[0], packet, response=True)
-        try:
-            data = await asyncio.wait_for(self.frames.get(), 10)
-        except asyncio.TimeoutError:
-            self.record_response({'kind': 'command', 'opcode': opcode, 'address': address,
-                                  'length': length, 'error': 'timeout',
-                                  'fragments': {str(i): part[:16].hex() for i, part in self.channels.items()}})
-            raise
+        char = self.client.services.get_characteristic(protocol.TX[0])
+        if char is None:
+            raise ValueError('Bluetoothのコマンド送信先が見つかりません')
+        properties = list(char.properties)
+        if 'write' not in properties and 'write-without-response' not in properties:
+            raise ValueError('Bluetoothのコマンド送信先が書き込みに対応していません')
+        use_response = 'write' in properties
+        # Only session open gets one bounded retry. Never replay key writes,
+        # measurement requests or close after an ambiguous response.
+        attempts = 2 if opcode == 0 else 1
+        for attempt in range(1, attempts + 1):
+            self.channels.clear()
+            while not self.frames.empty():
+                self.frames.get_nowait()
+            entry = {'kind': 'command', 'opcode': opcode, 'address': address, 'length': length,
+                     'attempt': attempt, 'tx_hex': packet.hex(), 'write_response': use_response,
+                     'tx_properties': properties}
+            self.record_response(entry)
+            await self.client.write_gatt_char(char, packet, response=use_response)
+            try:
+                data = await asyncio.wait_for(self.frames.get(), 10)
+                break
+            except asyncio.TimeoutError:
+                connected = bool(self.client.is_connected)
+                entry.update(error='timeout', connected=connected,
+                             fragments={str(i): part[:16].hex() for i, part in self.channels.items()})
+                if attempt < attempts and connected and not self.channels:
+                    await asyncio.sleep(0.25)
+                    continue
+                phase = {0: '通信開始', 1: '履歴読取', 15: '通信終了'}[opcode]
+                raise TimeoutError(f'{phase}の応答待ちが時間切れになりました（{attempt}回試行・'
+                                   f'{"接続中" if connected else "切断済み"}）') from None
         if isinstance(data, Exception):
+            entry['error'] = str(data)[:120]
             raise data
-        entry = {'kind': 'command', 'opcode': opcode, 'address': address, 'length': length,
-                 'raw_hex': data[:64].hex()}
-        self.record_response(entry)
+        entry['raw_hex'] = data[:64].hex()
         try:
             payload = protocol.response(data, opcode, address, length)
             if self.trace is not None:
@@ -227,13 +264,10 @@ async def operate(request, trace=None):
                 trace['stage'] = 'subscribe'
             await session.subscribe()
             if request["action"] == "pair":
-                await session.unlock(2, bytes(16), 0x82)
                 # The parent persists the proposed key before programming it so a
                 # later disconnect cannot lose the newly programmed credential.
                 key = bytes.fromhex(request["key"])
-                await session.unlock(0, key, 0x80)
-                await session.request(0, length=16)
-                await session.request(15)
+                await session.pair(key, device['model'])
                 if trace is not None:
                     trace['stage'] = 'completed'
                 return {"paired": True, **({'diagnostic': trace} if trace is not None else {})}
@@ -265,7 +299,7 @@ def main():
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         request = json.loads(sys.stdin.read(65536))
         if request.get('action') in ('pair', 'sync') and request.get('diagnostic') is True:
-            trace = {'stage': 'starting', 'slots': []}
+            trace = {'stage': 'starting', 'slots': [], 'protocol_revision': 2, 'rx_notifications': 0}
         result = asyncio.run(asyncio.wait_for(operate(request, trace), 180))
         print(json.dumps(result))
     except Exception as error:
