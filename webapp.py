@@ -20,9 +20,10 @@ from storage import CSV_FIELDS, Store, integer
 from durability import DataUnavailable, file_lock
 from protection import ProtectionManager
 from homehub_migration import MigrationManager
+from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -88,6 +89,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                   "/migration.js": ("migration.js", "text/javascript; charset=utf-8"),
+                  "/wellness.js": ("wellness.js", "text/javascript; charset=utf-8"),
                   "/protection.js": ("protection.js", "text/javascript; charset=utf-8"),
                   "/update.js": ("update.js", "text/javascript; charset=utf-8"),
                   "/icon.svg": ("icon.svg", "image/svg+xml")}
@@ -104,6 +106,13 @@ class Handler(BaseHTTPRequestHandler):
                              "data_path": str(self.store.path)})
         elif path == "/api/users":
             self._json(200, self.store.users())
+        elif path in ('/api/wellness/profile', '/api/wellness/summary', '/api/wellness/meals'):
+            user_id = query.get('user_id', [''])[0]
+            self._json(200, {'/api/wellness/profile': self.store.wellness_profile,
+                             '/api/wellness/summary': self.store.wellness_summary,
+                             '/api/wellness/meals': self.store.meals}[path](user_id))
+        elif path == '/api/ai/settings':
+            self._json(200, self.server.coach.status())
         elif path == "/api/devices":
             self._json(200, self.store.devices())
         elif path == "/api/records":
@@ -198,6 +207,24 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 elif path == "/api/users":
                     result = self.store.save_user(body)
+                elif path == '/api/wellness/profile':
+                    if set(body) != {'user_id', 'profile'}:
+                        raise ValueError('利用者と健康設定を指定してください')
+                    result = self.store.save_wellness_profile(body['user_id'], body['profile'])
+                elif path == '/api/wellness/meals':
+                    if set(body) != {'user_id', 'meal'}:
+                        raise ValueError('利用者と食事記録を指定してください')
+                    result = self.store.add_meal(body['user_id'], body['meal'])
+                elif path == '/api/ai/settings':
+                    result = self.server.coach.save(body)
+                elif path == '/api/ai/key':
+                    if set(body) != {'provider', 'key'}:
+                        raise ValueError('接続先とAPIキーを指定してください')
+                    result = self.server.coach.set_key(body['provider'], body['key'])
+                elif path == '/api/ai/consult':
+                    if set(body) != {'user_id', 'mode', 'question', 'consent'}:
+                        raise ValueError('相談内容を指定してください')
+                    result = self.server.coach.consult(body['user_id'], body['mode'], body['question'], body['consent'])
                 elif path == "/api/devices":
                     result = self.store.save_device(body)
                 elif path == "/api/records":
@@ -206,6 +233,11 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.store.edit_record(path.rsplit("/", 1)[1], body)
                 elif path == "/api/import":
                     result = self.store.import_csv(body.get("csv"), body.get("user_id")) if "csv" in body else self.store.add_records(body.get("records"), "api")
+                elif path in ('/api/omron-history/preview', '/api/omron-history/apply'):
+                    if set(body) != ({'csv', 'user_id'} if path.endswith('preview') else {'csv', 'user_id', 'preview_token'}):
+                        raise ValueError('CSVと取込先の利用者を指定してください')
+                    result = self.store.omron_history(body['csv'], body['user_id'],
+                        apply=path.endswith('apply'), preview_token=body.get('preview_token'))
                 elif path == "/api/restore":
                     result = self.store.restore(body)
                 elif path == "/api/jobs":
@@ -214,6 +246,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(405, {"error": "対応していない操作です"})
                     return
             else:
+                if path == '/api/wellness/meals':
+                    if set(body) != {'user_id', 'id'}:
+                        raise ValueError('利用者と食事記録を指定してください')
+                    self.store.delete_meal(body['user_id'], body['id'])
+                    self._json(200, {'deleted': True})
+                    return
                 match = re.fullmatch(r"/api/(users|devices|records)/([A-Za-z0-9_-]{1,64})", path)
                 if not match:
                     self._json(404, {"error": "見つかりません"})
@@ -252,6 +290,7 @@ def serve(args):
     protection = ProtectionManager(store)
     with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
         server.store, server.collector, server.protection = store, collector, protection
+        server.coach = Coach(args.data_dir, store)
         server.migration = MigrationManager(args.data_dir)
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()

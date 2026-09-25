@@ -40,13 +40,13 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile storage.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
+      - run: python -m py_compile storage.py omron_csv.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: npm test
-      - run: node --check web/app.js && node --check web/update.js && node --check web/protection.js && node --check web/migration.js
+      - run: node --check web/app.js && node --check web/wellness.js && node --check web/update.js && node --check web/protection.js && node --check web/migration.js
       - run: python -m py_compile webapp.py
       - run: docker compose --project-directory homehub -f homehub/compose-shared.yaml config --quiet
       - run: docker compose --project-directory homehub -f homehub/compose-legacy.yaml config --quiet
@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.5 >/dev/null 2>&1; then
-            echo 'Release v0.3.5 already exists; leaving it unchanged.'
+          if gh release view v0.3.6 >/dev/null 2>&1; then
+            echo 'Release v0.3.6 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.5 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.5' \
-            --notes 'Add discovery-based onboarding for HEM-6232T and HBF-228T: select a nearby device to fill its address, retain the scan adapter and transport, assign a user, and queue pairing. Unknown names require explicit model selection. Bluetooth pairing and history import still need NAS hardware validation.' \
+          gh release create v0.3.6 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.6' \
+            --notes 'Import multiple same-day OMRON connect blood pressure and body composition measurements through a previewed, atomic history transfer. Add per-user BMI and blood pressure reference lines, estimated BMR, meal notes, goal monitoring, and opt-in coaching with ControlDeck, QnapAssistant, local OpenAI-compatible models, or OpenRouter. Preserve wellness data in backups without exporting API keys.' \
             --target "$GITHUB_SHA"
