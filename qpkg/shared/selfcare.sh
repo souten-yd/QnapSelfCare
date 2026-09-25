@@ -29,7 +29,7 @@ case "${1:-}" in
         running && exit 0
         umask 077
         rm -f "$root/admin-token"
-        nohup python3 "$root/webapp.py" --lan --port 17863 > "$root/selfcare.log" 2>&1 &
+        nohup python3 "$root/webapp.py" --host 0.0.0.0 --port 17863 > "$root/selfcare.log" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
         running || { rm -f "$pidfile"; echo 'Web UI failed to start; check selfcare.log' >&2; exit 1; }
