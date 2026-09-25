@@ -59,16 +59,20 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
 
     def test_listen_addresses_are_explicit(self):
-        class Route:
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
-            def connect(self, *_): pass
-            def getsockname(self): return ("192.168.68.57", 0)
-        with patch.object(webapp.socket, "socket", return_value=Route()), \
-             patch.object(webapp.socket, "if_nameindex", return_value=[(1, "eth0"), (2, "tailscale0")]), \
-             patch.object(webapp, "interface_ipv4", return_value="100.101.102.103"):
+        interfaces = [(1, "tun0"), (2, "eth0"), (3, "tailscale0"), (4, "docker0")]
+        ip_by_name = {"tun0": "10.7.7.7", "eth0": "192.168.68.57",
+                      "tailscale0": "100.101.102.103", "docker0": "172.17.0.1"}
+        with patch.object(webapp.socket, "if_nameindex", return_value=interfaces), \
+             patch.object(webapp, "interface_ipv4", side_effect=ip_by_name.get) as lookup:
             self.assertEqual(webapp.listen_addresses(),
                              ["192.168.68.57", "127.0.0.1", "100.101.102.103"])
+            self.assertEqual([call.args[0] for call in lookup.call_args_list],
+                             ["eth0", "tailscale0"])
+
+    def test_missing_lan_interface_fails_with_reason(self):
+        with patch.object(webapp.socket, "if_nameindex", return_value=[(1, "tun0")]):
+            with self.assertRaisesRegex(ValueError, "no private IPv4"):
+                webapp.listen_addresses()
 
 
 if __name__ == "__main__":

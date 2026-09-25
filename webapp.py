@@ -7,6 +7,7 @@ import ipaddress
 import json
 from pathlib import Path
 import platform
+import re
 import socket
 import struct
 import threading
@@ -15,11 +16,12 @@ import updater
 
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 PRIVATE_LANS = tuple(ipaddress.ip_network(cidr) for cidr in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+LAN_INTERFACE = re.compile(r"(?:eth|bond|br|qvs|ovs|wlan)[0-9]+$|en[a-z0-9]+$")
 
 
 def interface_ipv4(name):
@@ -30,22 +32,27 @@ def interface_ipv4(name):
 
 
 def listen_addresses():
-    """Bind only the LAN and optional Tailscale interface plus loopback."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
-        route.connect(("192.0.2.1", 9))  # Select an interface without sending a packet.
-        lan = ipaddress.IPv4Address(route.getsockname()[0])
-    if not any(lan in private for private in PRIVATE_LANS):
-        raise ValueError("default route has no private LAN IPv4 address")
-    addresses = [str(lan), "127.0.0.1"]
+    """Bind actual LAN interface addresses regardless of the default route."""
+    lan_addresses = []
+    tailscale_address = None
     for _, name in socket.if_nameindex():
-        if name != "tailscale0":
+        if not LAN_INTERFACE.fullmatch(name) and name != "tailscale0":
             continue
         try:
             address = ipaddress.IPv4Address(interface_ipv4(name))
-            if address in ipaddress.ip_network("100.64.0.0/10") and str(address) not in addresses:
-                addresses.append(str(address))
+            if name == "tailscale0":
+                if address in ipaddress.ip_network("100.64.0.0/10"):
+                    tailscale_address = str(address)
+            elif any(address in private for private in PRIVATE_LANS):
+                if str(address) not in lan_addresses:
+                    lan_addresses.append(str(address))
         except OSError:
-            pass  # Some QNAP Tailscale installations use userspace networking.
+            pass  # Interfaces without an IPv4 address are normal on QNAP.
+    if not lan_addresses:
+        raise ValueError("no private IPv4 address found on a LAN interface")
+    addresses = lan_addresses + ["127.0.0.1"]
+    if tailscale_address and tailscale_address not in addresses:
+        addresses.append(tailscale_address)
     return addresses
 def architecture(machine=None):
     machine = machine or platform.machine()
