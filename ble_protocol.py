@@ -31,10 +31,18 @@ def command(opcode, address=0, length=0):
 def response(data, opcode, address, length):
     if len(data) < 8 or len(data) > 64 or data[0] != len(data) or checksum(data):
         raise ValueError("Bluetooth応答の長さまたはチェックサムが不正です")
+    if opcode != 15 and data[1:3] == b'\x8f\x00' and len(data) == 8:
+        raise ValueError(f"機器がコマンドを拒否しました（コード 0x{data[6]:02x}）")
     if data[1:3] != bytes([opcode | 0x80, 0]) or int.from_bytes(data[3:5], "big") != address:
         raise ValueError("Bluetooth応答が要求したコマンドと一致しません")
     if data[-2] != 0:
         raise ValueError(f"機器が通信エラーを返しました（{data[-2]}）")
+    # Session start/end acknowledge with an eight-byte control frame. The
+    # start command's 0x10 field is not a promise of 16 response payload bytes.
+    if opcode in (0, 15):
+        if len(data) != 8:
+            raise ValueError("通信開始・終了応答の長さが不正です")
+        return b''
     if data[5] != length or len(data) != length + 8:
         raise ValueError("Bluetooth応答のデータが不足しています")
     return data[6:-2]

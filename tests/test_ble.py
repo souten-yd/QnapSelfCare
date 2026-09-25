@@ -37,6 +37,95 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.command(0xc0, 0, 16)
 
+    def test_session_ack_is_control_frame_not_sixteen_bytes_of_measurements(self):
+        self.assertEqual(p.command(0, length=16).hex(), '0800000000100018')
+        self.assertEqual(p.response(bytes.fromhex('0880000000100098'), 0, 0, 16), b'')
+        self.assertEqual(p.response(bytes.fromhex('088f000000000087'), 15, 0, 0), b'')
+        with self.assertRaisesRegex(ValueError, 'コマンドを拒否'):
+            p.response(bytes.fromhex('088f000000000186'), 0, 0, 16)
+        with self.assertRaises(ValueError):
+            p.response(bytes.fromhex('08810002c020006b'), 1, 0x2c0, 32)
+
+    def test_cuff_pairing_authenticates_programmed_key_before_session_open(self):
+        async def exercise():
+            characteristic = Mock(properties=['write-without-response'])
+            client = Mock(is_connected=True, services=Mock())
+            client.services.get_characteristic.return_value = characteristic
+            client.start_notify = AsyncMock()
+            trace = {'stage': 'starting', 'slots': []}
+            session = Session(client, trace)
+            authenticated = False
+            operations = []
+            async def write(char, packet, response):
+                nonlocal authenticated
+                if char == p.UNLOCK:
+                    operations.append(('unlock', packet[0]))
+                    self.assertTrue(response)
+                    if packet[0] == 1:
+                        self.assertEqual(packet[1:], b'\xab' * 16)
+                        authenticated = True
+                    session.unlocks.put_nowait(bytes([packet[0] | 0x80, 0]))
+                else:
+                    self.assertFalse(response)
+                    operations.append(('command', packet[1]))
+                    if packet[1] == 0:
+                        self.assertTrue(authenticated, 'cuff requires auth after key programming')
+                        session.notify(0, bytes.fromhex('0880000000100098'))
+                    else:
+                        session.notify(0, bytes.fromhex('088f000000000087'))
+            client.write_gatt_char = AsyncMock(side_effect=write)
+            with patch('ble_worker.asyncio.sleep', new=AsyncMock()):
+                await session.subscribe()
+                await session.pair(b'\xab' * 16, 'HEM-6232T')
+            self.assertEqual([c.args[0] for c in client.start_notify.await_args_list], p.RX + [p.UNLOCK])
+            self.assertEqual(operations, [('unlock', 2), ('unlock', 0), ('unlock', 1), ('command', 0), ('command', 15)])
+            self.assertNotIn('ab' * 16, str(trace))
+            self.assertEqual(trace['responses'][-2]['status'], 'valid')
+        asyncio.run(exercise())
+
+    def test_session_open_retries_once_without_reprogramming_key(self):
+        async def exercise():
+            char = Mock(properties=['write'])
+            client = Mock(is_connected=True, services=Mock())
+            client.services.get_characteristic.return_value = char
+            trace = {'stage': 'starting', 'slots': []}
+            session = Session(client, trace)
+            async def write(*args, **kwargs):
+                if client.write_gatt_char.await_count == 2:
+                    session.notify(0, bytes.fromhex('0880000000100098'))
+            client.write_gatt_char = AsyncMock(side_effect=write)
+            calls = 0
+            async def wait(awaitable, seconds):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    awaitable.close()
+                    raise asyncio.TimeoutError
+                return await awaitable
+            with patch('ble_worker.asyncio.wait_for', side_effect=wait), patch('ble_worker.asyncio.sleep', new=AsyncMock()):
+                self.assertEqual(await session.request(0, length=16), b'')
+            self.assertEqual(client.write_gatt_char.await_count, 2)
+            self.assertEqual(trace['responses'][0]['error'], 'timeout')
+            self.assertEqual(trace['responses'][1]['status'], 'valid')
+            self.assertEqual(trace['responses'][1]['attempt'], 2)
+        asyncio.run(exercise())
+
+    def test_session_open_stops_on_disconnect_or_after_two_timeouts(self):
+        async def exercise(connected, expected_attempts):
+            client = Mock(is_connected=connected, services=Mock())
+            client.services.get_characteristic.return_value = Mock(properties=['write'])
+            client.write_gatt_char = AsyncMock()
+            session = Session(client, {'slots': []})
+            async def timeout(awaitable, seconds):
+                awaitable.close()
+                raise asyncio.TimeoutError
+            with patch('ble_worker.asyncio.wait_for', side_effect=timeout), patch('ble_worker.asyncio.sleep', new=AsyncMock()):
+                with self.assertRaisesRegex(TimeoutError, f'{expected_attempts}回試行'):
+                    await session.request(0, length=16)
+            self.assertEqual(client.write_gatt_char.await_count, expected_attempts)
+        asyncio.run(exercise(False, 1))
+        asyncio.run(exercise(True, 2))
+
     def test_fragment_reassembly_out_of_order(self):
         async def exercise():
             session = Session(AsyncMock())
@@ -146,6 +235,9 @@ class ProtocolTests(unittest.TestCase):
         async def exercise():
             trace = {'stage': 'starting', 'slots': []}
             client = AsyncMock()
+            client.services = Mock()
+            client.services.get_characteristic.return_value = Mock(properties=['write'])
+            client.is_connected = True
             session = Session(client, trace)
             frame = bytes([10, 129, 0, 2, 192, 2, 10, 11, 0])
             frame += bytes([p.checksum(frame)])

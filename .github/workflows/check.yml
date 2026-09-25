@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.9 >/dev/null 2>&1; then
-            echo 'Release v0.3.9 already exists; leaving it unchanged.'
+          if gh release view v0.3.10 >/dev/null 2>&1; then
+            echo 'Release v0.3.10 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.9 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.9' \
-            --notes 'Add system, light and night appearance modes with browser-local persistence. Theme covers forms, diagnostics, tables and chart colors. Bluetooth behavior is unchanged; no HomeHub update is required for the theme.' \
+          gh release create v0.3.10 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.10' \
+            --notes 'Fix HEM-6232T key-programming to authentication transition and parse short session acknowledgements correctly. Prime RX notifications, honor advertised write properties and allow one bounded session-open retry. Diagnostics include TX mode, notification count and link state. Shared Bluetooth requires HomeHub 0.3.3.' \
             --target "$GITHUB_SHA"
