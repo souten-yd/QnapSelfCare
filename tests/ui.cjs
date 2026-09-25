@@ -62,9 +62,10 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert(d.getElementById('ai-test'));
  assert.equal(d.getElementById('device-form').elements.sync_mode.value,'listen');
  const listenerFetch=w.fetch;
- w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}]}),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
+ w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}],completed_today:[registered.id]}),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
  await w.__testRefreshJobs();
  assert.match(d.getElementById('listen-status').textContent,/再試行まで約42秒/);
+ assert.match(d.getElementById('listen-status').textContent,/0時にリセット／手動は制限なし/);
  w.fetch=listenerFetch;
 
  d.querySelector('[data-page="wellness"]').click();

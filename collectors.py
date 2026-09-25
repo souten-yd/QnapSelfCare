@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-from storage import now
+from storage import now, sync_day
 from durability import write_json
 
 ROOT = Path(__file__).resolve().parent
@@ -95,6 +95,7 @@ class CollectorManager:
         self.lock = threading.Lock()
         self.pending = set()
         self.next_attempt = {}
+        self.sync_day = sync_day()
         self.next_scan = 0
         self.next_watch = 0
         self.watch_configured = False
@@ -127,6 +128,8 @@ class CollectorManager:
         if action != "scan":
             if device is None:
                 raise ValueError("機器が登録されていません")
+            if automatic and action == 'sync' and device.get('automatic_synced_today'):
+                raise ValueError('本日の自動同期は完了しています。手動同期はいつでも実行できます')
             if not device["address"]:
                 raise ValueError("Bluetoothアドレスを登録してください")
             if action == "sync" and not device["bindings"]:
@@ -164,6 +167,11 @@ class CollectorManager:
         with self.lock:
             watch_ticket = self.listen_jobs.pop(identifier, None)
         try:
+            if automatic and action == 'sync':
+                current = self.store.device(device['id'])
+                if not current or not current['auto_sync'] or current.get('automatic_synced_today'):
+                    self.store.update_job(identifier, 'skipped', '本日の自動同期が完了済み、または自動同期が解除されたため取り消しました')
+                    return
             if watch_ticket is not None:
                 current = self.store.device(device['id'])
                 if self.listen_signature(current) != watch_ticket['signature']:
@@ -207,7 +215,7 @@ class CollectorManager:
                 message = f"{len(result.get('devices', []))}台検出しました"
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
-            self.store.update_job(identifier, "done", message, result)
+            self.store.update_job(identifier, "done", message, result, automatic=automatic and action == "sync")
         except Exception as error:
             trace = getattr(error, 'diagnostic', None) or trace
             # The peer is another local service, but do not persist unbounded or malformed diagnostics.
@@ -241,7 +249,7 @@ class CollectorManager:
 
     @staticmethod
     def listen_signature(device):
-        if not device or not (device['auto_sync'] and device['paired'] and device['bindings']
+        if not device or device.get('automatic_synced_today') or not (device['auto_sync'] and device['paired'] and device['bindings']
                 and device.get('sync_mode') == 'listen' and device['transport'] == 'homehub'):
             return None
         return json.dumps({k: device[k] for k in ('address', 'adapter', 'model', 'bindings', 'transport')}, sort_keys=True)
@@ -266,6 +274,7 @@ class CollectorManager:
             return
         self.next_watch = time.monotonic() + 2
         devices = [d for d in self.store.devices() if d['auto_sync'] and d['paired'] and d['bindings']
+                   and not d.get('automatic_synced_today')
                    and d.get('sync_mode', 'interval') == 'listen' and d['transport'] == 'homehub']
         if not devices and not self.watch_configured:
             self.listen_ready = False
@@ -303,13 +312,20 @@ class CollectorManager:
             self.next_watch = time.monotonic() + 10
 
     def schedule(self):
+        today = sync_day()
+        if today != self.sync_day:
+            # Midnight releases the daily gate even if the previous cooldown crosses midnight.
+            self.next_attempt.clear()
+            self.next_scan = 0
+            self.next_watch = 0
+            self.sync_day = today
         self.dispatch_listen()
         self.listen()
         if time.monotonic() < self.next_scan:
             return
         eligible = []
         for device in self.store.devices():
-            if device.get("sync_mode", "interval") != "interval":
+            if device.get("automatic_synced_today") or device.get("sync_mode", "interval") != "interval":
                 continue
             if not (device["auto_sync"] and device["paired"] and device["bindings"] and (device["transport"] == "homehub" or device["exclusive"])):
                 continue
@@ -377,7 +393,8 @@ class CollectorManager:
                        for did, ticket in self.listen_delayed.items()]
             busy = bool(self.pending)
         return {'ready': self.listen_ready, 'error': self.listen_error,
-                'configured': self.watch_configured, 'busy': busy, 'waiting': waiting}
+                'configured': self.watch_configured, 'busy': busy, 'waiting': waiting,
+                'completed_today': [d['id'] for d in self.store.devices() if d['auto_sync'] and d.get('automatic_synced_today')]}
 
     def diagnostics(self):
         root = self.store.directory.parent

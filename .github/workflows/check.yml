@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.16 >/dev/null 2>&1; then
-            echo 'Release v0.3.16 already exists; leaving it unchanged.'
+          if gh release view v0.3.17 >/dev/null 2>&1; then
+            echo 'Release v0.3.17 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.16 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.16' \
-            --notes 'Advertisement-triggered sync waits 60 seconds for measurement completion, then retries once 60 seconds after a failure. Per-device non-blocking timers, cancellation on disable/remove, immediate manual sync and visible countdown.' \
+          gh release create v0.3.17 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.17' \
+            --notes 'Automatic device synchronization succeeds at most once per device per Japan calendar day, resetting at 00:00 JST. Manual synchronization is unrestricted. Daily state survives restart and backup, successful devices stop background scanning/listening, and failed attempts retain the delayed retry.' \
             --target "$GITHUB_SHA"
