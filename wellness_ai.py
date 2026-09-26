@@ -122,11 +122,11 @@ class Coach:
         context['energy_notices'] = activity['notices']
         context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)
         context['plan_analysis'] = activity.get('plan_analysis')
-        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 600,
+        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 1200 if mode in ('diet', 'review') else 600,
                   'messages': [{'role': 'system', 'content':
                       'あなたは健康記録・食事・減量計画の整理を支援します。診断、治療、薬の変更や断定的なカロリー処方はしません。'
                       '測定値と推定値を区別し、個人目標は本人の確認後にだけ適用します。気になる症状や継続する異常値は医療者への相談を促します。'
-                      '無理な減量やBMI下限を下回る目標を勧めません。簡潔な日本語で答えてください。'},
+                      '無理な減量やBMI下限を下回る目標を勧めません。計画見直しでは数値の根拠、調整候補とトレードオフを具体的に説明してください。'},
                     {'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
                        'question': question.strip()}, ensure_ascii=False)}]}
         return self._complete(config, prompt)
