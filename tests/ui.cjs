@@ -114,6 +114,17 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.match(d.getElementById('weekly-review').textContent,/目標まで 5 kg/);
  assert.equal(wellbeing.elements.goal_date.disabled,true);
  assert.match(d.getElementById('weight-plan-chart').textContent,/代謝変化を含む試算/);
+ assert.match(d.getElementById('plan-analysis').textContent,/目標日の試算体重/);
+ d.getElementById('plan-info').click();assert.equal(d.getElementById('plan-explanation').hidden,false);assert.match(d.getElementById('plan-explanation').textContent,/2本の線は意味が違います/);
+ assert.match(d.getElementById('plan-calc-preview').textContent,/基礎代謝/);
+ const aiFetch=w.fetch;
+ w.fetch=(url,init)=>url==='/api/ai/meal-estimate'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({total_kcal:1850,meals:[{name:'朝食',kcal:450,basis:'標準量'}],assumptions:['標準量'],web_research_used:false,summary:'概算',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):url==='/api/ai/consult'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'期間・標準摂取・生活活動・標準運動を比較して見直します。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):aiFetch(url,init);
+ const meal=d.getElementById('meal-estimate-form');meal.elements.date.value='2026-09-25';meal.elements.breakfast.value='パンと卵';meal.elements.lunch.value='カレー';meal.elements.dinner.value='焼き魚定食';submit('meal-estimate-form');
+ await until(()=>d.getElementById('meal-estimate-summary').textContent.includes('1850 kcal'));
+ d.getElementById('meal-to-daily').click();assert.equal(activity.elements.intake_kcal.value,'1850');assert.equal(activity.elements.reuse.value,'once');
+ d.getElementById('meal-to-standard').click();assert.equal(plan.elements.target_kcal.value,'1850');
+ d.getElementById('plan-ai').click();await until(()=>d.getElementById('plan-ai-answer').textContent.includes('標準運動'));
+ w.fetch=aiFetch;
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');
  await until(()=>d.getElementById('plan-history').textContent.includes('活動量に合わせ延長'));
  assert.match(d.getElementById('plan-history').textContent,/2027-03-01/);

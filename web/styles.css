@@ -134,3 +134,31 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 :root{--energy-intake:#8a479e;--energy-target:#286ba3}:root[data-theme=dark]{--energy-intake:#cb9fdb;--energy-target:#80b9e8}
 
 .energy-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+
+/* Weight-plan explanation, standard-model preview and AI meal estimate. */
+.plan-heading{display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap}
+.plan-heading h2{margin:0}.plan-actions{display:flex;align-items:center;gap:8px}
+.icon-button{width:44px;height:44px;padding:10px;display:inline-grid;place-items:center}
+.icon-button svg{width:20px;height:20px}
+.plan-explanation p{margin:7px 0;color:inherit}
+.plan-analysis{margin:12px 0}
+.plan-analysis-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.plan-analysis-grid>div{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-soft)}
+.plan-analysis-grid span{font-size:11px;color:var(--muted)}
+.plan-analysis-grid strong{font-size:14px;overflow-wrap:anywhere}
+#plan-ai-answer{white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;margin:12px 0}
+#plan-calc-preview{margin:12px 0}
+.meal-estimator{margin:14px 0;border-top:1px solid var(--border);padding-top:12px}
+.meal-estimate-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+.meal-estimate-grid label:first-child{grid-column:1/-1}
+.meal-estimate-grid textarea{min-height:74px;resize:vertical}
+#meal-estimate-result .row{margin-top:10px}
+@media(max-width:700px){
+ .plan-heading{align-items:flex-start}.plan-actions{width:100%}.plan-actions #plan-ai{flex:1}
+ .plan-analysis-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .meal-estimate-grid{grid-template-columns:minmax(0,1fr)}
+ .meal-estimate-grid label:first-child{grid-column:auto}
+}
+
+.ai-guide-button{display:inline-flex;align-items:center;gap:7px}.ai-guide-button svg{width:18px;height:18px;flex:none}

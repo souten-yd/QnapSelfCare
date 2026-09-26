@@ -121,15 +121,82 @@ class Coach:
         context['weekly_review'] = [w for w in activity['weeks'] if not w['future']][-4:]
         context['energy_notices'] = activity['notices']
         context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)
-        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 600,
+        context['plan_analysis'] = activity.get('plan_analysis')
+        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 1200 if mode in ('diet', 'review') else 600,
                   'messages': [{'role': 'system', 'content':
                       'あなたは健康記録・食事・減量計画の整理を支援します。診断、治療、薬の変更や断定的なカロリー処方はしません。'
                       '測定値と推定値を区別し、個人目標は本人の確認後にだけ適用します。気になる症状や継続する異常値は医療者への相談を促します。'
-                      '無理な減量やBMI下限を下回る目標を勧めません。簡潔な日本語で答えてください。'},
+                      '無理な減量やBMI下限を下回る目標を勧めません。計画見直しでは数値の根拠、調整候補とトレードオフを具体的に説明してください。'},
                     {'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
                        'question': question.strip()}, ensure_ascii=False)}]}
         return self._complete(config, prompt)
 
+    def estimate_meal(self, payload):
+        if not isinstance(payload, dict) or set(payload) != {'date', 'breakfast', 'lunch', 'dinner', 'snacks'}:
+            raise ValueError('食事試算の項目が不正です')
+        cleaned = {}
+        for key in ('date', 'breakfast', 'lunch', 'dinner', 'snacks'):
+            value = payload.get(key)
+            if not isinstance(value, str):
+                raise ValueError('食事内容は文字列で指定してください')
+            value = value.strip()
+            if len(value) > (10 if key == 'date' else 1200):
+                raise ValueError('食事内容が長すぎます')
+            cleaned[key] = value
+        if cleaned['date'] and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', cleaned['date']):
+            raise ValueError('日付はYYYY-MM-DDで指定してください')
+        if not any(cleaned[key] for key in ('breakfast', 'lunch', 'dinner', 'snacks')):
+            raise ValueError('朝食・昼食・夕食・間食のいずれかを入力してください')
+        config = self.settings()
+        if not config['base_url']:
+            raise ValueError('AI接続先を設定してください')
+        schema = {'total_kcal': 0, 'meals': [{'name': '朝食', 'kcal': 0, 'basis': '量や品目の前提'}],
+                  'assumptions': ['推定上の前提'], 'web_research_used': False, 'summary': '短い説明'}
+        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 700,
+                  'messages': [{'role': 'system', 'content':
+                      'あなたは食事内容から1日摂取カロリーを概算する補助者です。医療診断や断定的な栄養処方はしません。'
+                      '量が不明なら一般的な一人前を仮定し、幅が大きい場合は前提を明示してください。'
+                      '接続先にWeb検索機能が実際にある場合だけ、必要に応じてメーカー・飲食店・公的栄養情報を参照してください。'
+                      'Webを使っていないのに使ったと主張しないでください。JSON以外は出力しないでください。'},
+                    {'role': 'user', 'content': json.dumps({'task':'朝昼夕・間食から総摂取カロリーを概算',
+                       'input': cleaned, 'required_json_shape': schema}, ensure_ascii=False)}]}
+        result = self._complete(config, prompt)
+        raw = result['answer'].strip().replace(chr(96)*3 + 'json', '').replace(chr(96)*3, '').strip()
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as error:
+            match = re.search(r'\{.*\}', raw, re.S)
+            if not match:
+                raise ValueError('AIの食事試算を数値として読み取れませんでした。内容を具体化して再試行してください') from error
+            try:
+                value = json.loads(match.group(0))
+            except json.JSONDecodeError as nested:
+                raise ValueError('AIの食事試算を数値として読み取れませんでした。内容を具体化して再試行してください') from nested
+        if not isinstance(value, dict):
+            raise ValueError('AIの食事試算形式が不正です')
+        total = value.get('total_kcal')
+        if isinstance(total, bool) or not isinstance(total, (int, float)) or not 0 <= total <= 15000:
+            raise ValueError('AIの総摂取カロリーが不正です')
+        meals = value.get('meals', [])
+        if not isinstance(meals, list) or len(meals) > 12:
+            raise ValueError('AIの食事内訳が不正です')
+        normalized = []
+        for item in meals:
+            if not isinstance(item, dict):
+                raise ValueError('AIの食事内訳が不正です')
+            name, kcal, basis = item.get('name', ''), item.get('kcal'), item.get('basis', '')
+            if not isinstance(name, str) or len(name) > 40 or isinstance(kcal, bool) or not isinstance(kcal, (int, float)) or not 0 <= kcal <= 10000 or not isinstance(basis, str):
+                raise ValueError('AIの食事内訳が不正です')
+            normalized.append({'name': name[:40], 'kcal': round(kcal), 'basis': basis[:300]})
+        assumptions = value.get('assumptions', [])
+        if not isinstance(assumptions, list) or any(not isinstance(x, str) for x in assumptions):
+            assumptions = []
+        summary = value.get('summary', '')
+        if not isinstance(summary, str):
+            summary = ''
+        return {'total_kcal': round(total), 'meals': normalized, 'assumptions': [x[:300] for x in assumptions[:8]],
+                'web_research_used': value.get('web_research_used') is True, 'summary': summary[:1000],
+                'provider': result['provider'], 'model': result['model']}
     def test_connection(self):
         config = self.settings()
         return self._complete(config, {'model': config['model'], 'stream': False, 'max_tokens': 16,
