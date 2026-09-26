@@ -45,9 +45,9 @@ $('ai-test').addEventListener('click',guarded(async()=>{
  catch(error){$('ai-test-result').textContent=error.message;throw error;}
 }));
 
-let energyData=null;
+let energyData=null,wellnessSummaryData=null,mealEstimateResult=null;
 const activityNumbers=['pal','steps','minutes','total_kcal','intake_kcal','target_kcal'];
-const planNumbers=['start_weight','goal_weight','pal','deficit_kcal','target_kcal','adaptation_pct'];
+const planNumbers=['start_weight','goal_weight','pal','deficit_kcal','target_kcal','adaptation_pct','exercise_minutes','exercise_met'];
 const energyValue=(v,unit='')=>v==null?'—':v+unit;
 function energyPlot(id,series,unit){
  const container=$(id);container.replaceChildren();
@@ -77,6 +77,46 @@ function drawEnergy(){
  energyPlot('weight-plan-chart',series,'kg');
 }
 function fillActivity(entry){const f=$('activity-form');f.reset();f.elements.date.value=entry.date;for(const k of [...activityNumbers,'note'])if(entry[k]!=null){if(k==='pal'&&![...f.elements.pal.options].some(o=>o.value===String(entry[k])))f.elements.pal.add(new Option('設定値（'+entry[k]+'）',String(entry[k])));f.elements[k].value=entry[k];}}
+function ensureOption(select,value,label='設定値'){
+ if(value==null||value==='')return;
+ if(![...select.options].some(o=>o.value===String(value)))select.add(new Option(label+'（'+value+'）',String(value)));
+}
+function planBmr(weight){
+ const p=wellnessSummaryData?.profile;if(!p||!weight||!p.height_cm||p.age==null||!p.sex)return null;
+ return Math.round(10*weight+6.25*p.height_cm-5*p.age+(p.sex==='male'?5:-161));
+}
+function planFormValues(){
+ const f=$('weight-plan-form'),n=k=>f.elements[k].value===''?null:Number(f.elements[k].value);
+ return {start_date:f.elements.start_date.value,goal_date:f.elements.goal_date.value,start_weight:n('start_weight'),goal_weight:n('goal_weight'),
+  pal:n('pal'),deficit_kcal:n('deficit_kcal'),target_kcal:n('target_kcal'),adaptation_pct:n('adaptation_pct'),
+  exercise_minutes:n('exercise_minutes'),exercise_met:n('exercise_met')};
+}
+function updatePlanPreview(){
+ const box=$('plan-calc-preview');if(!box)return;const v=planFormValues(),basal=planBmr(v.start_weight);
+ if(basal==null){box.textContent='身体情報の身長・年齢・基礎代謝の計算条件と開始体重を設定すると、ここに標準モデルの計算内訳を表示します。';return;}
+ const exercise=Math.round(Math.max((v.exercise_met??1)-1,0)*3.5*v.start_weight/200*(v.exercise_minutes??0));
+ const total=Math.round(basal*(v.pal??1.2)+exercise),floor=Math.max(1200,basal);
+ const intake=v.target_kcal??Math.max(floor,Math.round(total-(v.deficit_kcal??0))),initial=Math.round(total-intake);
+ let needed=null,neededIntake=null;
+ if(v.start_date&&v.goal_date&&v.goal_weight!=null){const days=Math.round((Date.parse(v.goal_date+'T00:00:00Z')-Date.parse(v.start_date+'T00:00:00Z'))/86400000);if(days>0){needed=Math.round((v.start_weight-v.goal_weight)*7700/days);neededIntake=Math.round(total-needed);}}
+ let text=`開始時の推定：基礎代謝 ${basal} kcal/日、生活活動＋標準運動の総消費 ${total} kcal/日（運動の追加分 約${exercise} kcal/日）、標準摂取 ${intake} kcal/日、初期の差 約${initial} kcal/日。`;
+ if(needed!=null)text+=` 目標日から単純逆算すると平均 約${needed} kcal/日の差が必要です。`;
+ if(neededIntake!=null&&neededIntake<floor)text+=` 逆算した開始時摂取 ${neededIntake} kcal/日は自動計算の下限 ${floor} kcal/日を下回るため、期間や活動量も含めて見直してください。`;
+ box.textContent=text;
+}
+function renderPlanAnalysis(data){
+ const box=$('plan-analysis');box.replaceChildren();const a=data.plan_analysis;
+ if(!a){box.append(element('p','計画を保存すると、試算の到達点と目標との差を表示します。','muted'));return;}
+ const gap=a.projected_gap_kg==null?'—':(a.projected_gap_kg>0?'+':'')+a.projected_gap_kg+' kg';
+ const grid=element('div',undefined,'plan-analysis-grid');
+ for(const [label,value] of [['目標日の試算体重',energyValue(a.projected_goal_weight,' kg')],['目標との差',gap],
+  ['必要な平均エネルギー差',energyValue(a.required_daily_deficit_kcal,' kcal/日')],['開始時の推定総消費',energyValue(a.start_total_kcal,' kcal/日')],
+  ['標準摂取',energyValue(a.planned_intake_kcal,' kcal/日')],['標準運動の追加消費',energyValue(a.start_exercise_kcal,' kcal/日')]]){
+   const cell=element('div');cell.append(element('span',label),element('strong',String(value)));grid.append(cell);
+ }
+ box.append(grid);
+ if(a.floor_blocks_required_intake)box.append(element('p',`目標日から逆算した開始時摂取 ${a.required_start_intake_kcal} kcal/日は、自動計算の下限 ${a.safety_floor_kcal} kcal/日を下回ります。摂取だけで合わせず、目標日の延長・生活活動・標準運動を含めて見直してください。`,'notice'));
+}
 function renderEnergy(data,summary){
  energyData=data;const current=data.current,stats=$('energy-today');stats.replaceChildren();
  for(const [label,value]of [['推定基礎代謝',current.bmr],['今日の総消費',current.total_kcal],['今日の摂取目標',current.target_kcal],['摂取（'+(current.source==='routine'?'いつもの設定':'その日の入力')+'）',current.intake_kcal]]){const cell=element('div');cell.append(element('span',label),element('strong',energyValue(value,' kcal')));stats.append(cell);}
