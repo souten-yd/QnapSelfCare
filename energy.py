@@ -46,7 +46,7 @@ def plan(value):
     if not 7 <= (end - start).days <= 1095 or start > today():
         raise ValueError('開始日は今日以前、目標日は開始から7日〜3年以内にしてください')
     result = {'start_date': start.isoformat(), 'goal_date': end.isoformat()}
-    defaults = {'pal': 1.2, 'deficit_kcal': 300, 'adaptation_pct': 0, 'exercise_minutes': 0, 'exercise_met': 1}
+    defaults = {'pal': 1.5, 'deficit_kcal': 300, 'adaptation_pct': 0, 'exercise_minutes': 0, 'exercise_met': 1}
     for key, low, high in [('start_weight', 25, 400), ('goal_weight', 25, 400), ('pal', 1.2, 2.4),
                            ('deficit_kcal', 0, 750), ('adaptation_pct', 0, 15),
                            ('exercise_minutes', 0, 1440), ('exercise_met', 1, 20)]:
