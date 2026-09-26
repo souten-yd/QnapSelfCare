@@ -16,9 +16,10 @@ class WeightPlanModelTests(unittest.TestCase):
         self.assertEqual(energy.exercise_kcal(100, 60, 1), 0)
 
     def test_plan_analysis_explains_when_safety_floor_prevents_required_intake(self):
-        plan = energy.plan({'start_date':'2026-09-26','start_weight':101.2,'goal_date':'2027-03-31','goal_weight':80,
-                            'pal':1.2,'deficit_kcal':750,'target_kcal':None,'adaptation_pct':0,
-                            'exercise_minutes':0,'exercise_met':1,'reason':''})
+        with patch('energy.today', return_value=date(2026,9,26)):
+            plan = energy.plan({'start_date':'2026-09-26','start_weight':101.2,'goal_date':'2027-03-31','goal_weight':80,
+                                'pal':1.2,'deficit_kcal':750,'target_kcal':None,'adaptation_pct':0,
+                                'exercise_minutes':0,'exercise_met':1,'reason':''})
         report = energy.report(self.profile, self.records, [], [plan], current=date(2026,9,26))
         analysis = report['plan_analysis']
         self.assertGreater(analysis['required_daily_deficit_kcal'], 800)
