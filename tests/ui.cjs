@@ -15,7 +15,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  const w=dom.window,d=w.document;
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;');
+ w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -26,6 +26,14 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent.includes('1件保存'));
  await until(()=>d.getElementById('history').textContent.includes('最高血圧 130'));
  assert.match(d.getElementById('latest-bp').textContent,/130 \/ 80/);
+ // The Tokyo calendar day controls each badge, including the UTC day boundary.
+ w.__testMark('bp-today-star',{measured_at:'2026-09-26T15:00:00Z'},new Date('2026-09-27T00:01:00Z'));
+ assert.equal(d.getElementById('bp-today-star').hidden,false);
+ assert.equal(d.getElementById('weight-today-star').hidden,true);
+ w.__testMark('weight-today-star',{measured_at:'2026-09-26T14:59:00Z'},new Date('2026-09-27T00:01:00Z'));
+ assert.equal(d.getElementById('weight-today-star').hidden,true);
+ w.__testMark('bp-today-star',null,new Date('2026-09-27T00:01:00Z'));
+ assert.equal(d.getElementById('bp-today-star').hidden,true);
  d.getElementById('history').querySelector('.record-controls').open=true;
  d.getElementById('history').querySelector('button').click();form.elements.pulse.value='74';submit('record-form');
  await until(()=>d.getElementById('message').textContent==='記録を更新しました');

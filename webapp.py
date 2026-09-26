@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.20"
+VERSION = "0.3.21"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024

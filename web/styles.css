@@ -133,6 +133,9 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 
 :root{--energy-intake:#8a479e;--energy-target:#286ba3}:root[data-theme=dark]{--energy-intake:#cb9fdb;--energy-target:#80b9e8}
 
+.metric-title{display:flex;align-items:flex-start;justify-content:space-between;gap:4px;min-height:1.5em}
+.metrics .today-star{flex:none;font-size:18px;line-height:1;letter-spacing:0}
+
 .energy-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 
 
