@@ -145,4 +145,22 @@ $('activity-previous').addEventListener('click',()=>{if(!energyData)return;const
 $('routine-stop').addEventListener('click',guarded(async()=>{await api('/api/wellness/routine',{user_id:$('current-user').value,entry:null});await refreshWellness();message('今日からの使い回しを停止しました。その日の入力は残ります');}));
 $('activity-form').addEventListener('submit',guarded(async()=>{const f=$('activity-form'),entry={date:f.elements.date.value,note:f.elements.note.value};for(const k of activityNumbers)entry[k]=f.elements[k].value===''?null:Number(f.elements[k].value);await api('/api/wellness/activity',{user_id:$('current-user').value,entry,reuse:f.elements.reuse.value==='repeat'});await refreshWellness();message('活動記録を保存しました');}));
 $('weight-plan-form').addEventListener('submit',guarded(async()=>{const f=$('weight-plan-form'),entry={start_date:f.elements.start_date.value,goal_date:f.elements.goal_date.value,reason:f.elements.reason.value};for(const k of planNumbers)entry[k]=f.elements[k].value===''?null:Number(f.elements[k].value);await api('/api/wellness/weight-plan',{user_id:$('current-user').value,entry});await refreshWellness();message('減量計画と見直し履歴を保存しました');}));
-$('plan-rebase').addEventListener('click',()=>{if(!energyData)return;const f=$('weight-plan-form'),weights=energyData.history.filter(x=>x.weight!=null);f.elements.start_date.value=energyData.today;f.elements.start_weight.value=weights.at(-1)?.weight??'';f.elements.reason.focus();});
+$('weight-plan-form').addEventListener('input',updatePlanPreview);$('weight-plan-form').addEventListener('change',updatePlanPreview);
+$('plan-rebase').addEventListener('click',()=>{if(!energyData)return;const f=$('weight-plan-form'),weights=energyData.history.filter(x=>x.weight!=null);f.elements.start_date.value=energyData.today;f.elements.start_weight.value=weights.at(-1)?.weight??'';updatePlanPreview();f.elements.reason.focus();});
+$('plan-info').addEventListener('click',()=>{$('plan-explanation').hidden=!$('plan-explanation').hidden;});
+$('plan-ai').addEventListener('click',guarded(async()=>{
+ const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');if(!energyData?.active_plan)throw Error('先に減量計画を保存してください');
+ $('plan-ai-answer').hidden=false;$('plan-ai-answer').textContent='AIで計画を分析中…';
+ const question='現在の減量計画について、目標の計画線と代謝変化を含む試算の差、plan_analysis、直近の週次実績を使って説明してください。目標達成に向け、目標日の延長、標準摂取、生活活動、標準運動の4つをどう調整できるか具体的な候補を示し、無理な減量や安全ガード下限を下回る摂取は提案しないでください。推定と実測を区別し、優先順位ではなく選択肢とトレードオフとして示してください。';
+ const result=await api('/api/ai/consult',{user_id,mode:'review',question});$('plan-ai-answer').textContent=result.answer;message('AIの計画分析を受け取りました');
+}));
+$('meal-estimate-form').addEventListener('submit',guarded(async()=>{
+ const f=$('meal-estimate-form');const meals={date:f.elements.date.value,breakfast:f.elements.breakfast.value,lunch:f.elements.lunch.value,dinner:f.elements.dinner.value,snacks:f.elements.snacks.value};
+ $('meal-estimate-result').hidden=false;$('meal-estimate-summary').textContent='AIで試算中…';
+ mealEstimateResult=await api('/api/ai/meal-estimate',{meals});
+ const parts=mealEstimateResult.meals.map(x=>`${x.name} 約${x.kcal} kcal${x.basis?'（'+x.basis+'）':''}`);
+ const assumptions=mealEstimateResult.assumptions.length?' 前提：'+mealEstimateResult.assumptions.join(' / '):'';
+ $('meal-estimate-summary').textContent=`合計 約${mealEstimateResult.total_kcal} kcal。${parts.join('、')}。${mealEstimateResult.summary||''}${assumptions} ［${mealEstimateResult.web_research_used?'AI接続先によるWeb参照あり':'Web参照なし／AI知識による概算'}］`;
+}));
+$('meal-to-daily').addEventListener('click',()=>{if(!mealEstimateResult)return;const src=$('meal-estimate-form'),dst=$('activity-form');dst.elements.date.value=src.elements.date.value;dst.elements.intake_kcal.value=mealEstimateResult.total_kcal;dst.elements.reuse.value='once';dst.closest('details').open=true;dst.scrollIntoView({block:'center'});message('AI試算をその日の摂取欄へ反映しました。内容を確認して保存してください');});
+$('meal-to-standard').addEventListener('click',()=>{if(!mealEstimateResult)return;const f=$('weight-plan-form');f.elements.target_kcal.value=mealEstimateResult.total_kcal;$('weight-plan-editor').open=true;updatePlanPreview();f.elements.target_kcal.scrollIntoView({block:'center'});message('AI試算を標準摂取欄へ反映しました。計画を確認して保存してください');});
