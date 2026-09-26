@@ -160,3 +160,5 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
  .meal-estimate-grid{grid-template-columns:minmax(0,1fr)}
  .meal-estimate-grid label:first-child{grid-column:auto}
 }
+
+.ai-guide-button{display:inline-flex;align-items:center;gap:7px}.ai-guide-button svg{width:18px;height:18px;flex:none}
