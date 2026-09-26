@@ -118,11 +118,12 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  d.getElementById('plan-info').click();assert.equal(d.getElementById('plan-explanation').hidden,false);assert.match(d.getElementById('plan-explanation').textContent,/2本の線は意味が違います/);
  assert.match(d.getElementById('plan-calc-preview').textContent,/基礎代謝/);
  const aiFetch=w.fetch;
- w.fetch=(url,init)=>url==='/api/ai/meal-estimate'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({total_kcal:1850,meals:[{name:'朝食',kcal:450,basis:'標準量'}],assumptions:['標準量'],web_research_used:false,summary:'概算',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):url==='/api/ai/consult'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'期間・標準摂取・生活活動・標準運動を比較して見直します。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):aiFetch(url,init);
+ w.fetch=(url,init)=>url==='/api/ai/meal-estimate'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'朝食: パン 300 kcal、卵 150 kcal。小計 450 kcal。\n昼食: 700 kcal。\n夕食: 700 kcal。\n合計 1850 kcal。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):url==='/api/ai/consult'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'期間・標準摂取・生活活動・標準運動を比較して見直します。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):aiFetch(url,init);
  const meal=d.getElementById('meal-estimate-form');meal.elements.date.value='2026-09-25';meal.elements.breakfast.value='パンと卵';meal.elements.lunch.value='カレー';meal.elements.dinner.value='焼き魚定食';submit('meal-estimate-form');
  await until(()=>d.getElementById('meal-estimate-summary').textContent.includes('1850 kcal'));
- d.getElementById('meal-to-daily').click();assert.equal(activity.elements.intake_kcal.value,'1850');assert.equal(activity.elements.reuse.value,'once');
- d.getElementById('meal-to-standard').click();assert.equal(plan.elements.target_kcal.value,'1850');
+ assert.match(d.getElementById('meal-estimate-summary').textContent,/パン 300 kcal.*卵 150 kcal/);
+ assert.equal(d.getElementById('meal-to-daily'),null);assert.equal(d.getElementById('meal-to-standard'),null);
+ assert.notEqual(activity.elements.intake_kcal.value,'1850');assert.notEqual(plan.elements.target_kcal.value,'1850');
  d.getElementById('plan-ai').click();await until(()=>d.getElementById('plan-ai-answer').textContent.includes('標準運動'));
  w.fetch=aiFetch;
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');

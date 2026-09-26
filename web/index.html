@@ -15,7 +15,7 @@
 <label>その日の摂取目標 kcal<input name="target_kcal" type="number" min="1000" max="6000" placeholder="空欄は計画から計算"></label><label>メモ<input name="note" maxlength="1000"></label></div>
 <p class="muted">総消費＝推定基礎代謝×活動係数。歩数・運動時間は活動量の振り返り用で、消費量に重ねて加算しません。総消費を入力すると推定値に置き換わります（運動だけのカロリーではありません）。総摂取は朝昼晩・間食を含む1日分の合計です。保存後は毎日入力しなくても、未入力の日にいつもの値を使います。違う日だけ「この日だけ変更」で保存できます。使い回した値は実績と区別します。食事メモとは合算しません。</p><div class="row"><button>活動・摂取量を保存</button><button type="button" id="activity-load" class="secondary">この日の値を読込</button><button type="button" id="activity-previous" class="secondary">前回の入力を使う</button></div><p id="activity-status" role="status"></p></form></details>
 <details id="meal-estimator" class="meal-estimator"><summary>朝食・昼食・夕食からAIで摂取カロリーを試算</summary>
-<p class="muted">食べた内容を文章で入力します。設定済みのAIが一般的な量・栄養情報から概算し、接続先自体がWeb検索に対応している場合だけ必要に応じて公開情報を参照します。結果は自動保存せず、確認してから「その日の摂取」または「標準摂取」へ反映します。</p>
+<p class="muted">食べた内容を文章で入力します。設定済みのAIが品目別、食事別、1日合計を文章で概算します。接続先自体がWeb検索に対応している場合だけ必要に応じて公開情報を参照します。回答は保存されません。</p>
 <form id="meal-estimate-form"><div class="meal-estimate-grid">
 <label>日付<input name="date" type="date" required></label>
 <label>朝食<textarea name="breakfast" rows="2" maxlength="1200" placeholder="例：食パン1枚、ゆで卵、無糖コーヒー"></textarea></label>
@@ -23,7 +23,7 @@
 <label>夕食<textarea name="dinner" rows="2" maxlength="1200" placeholder="例：ご飯150g、焼き鮭、冷奴、サラダ"></textarea></label>
 <label>間食・飲み物<textarea name="snacks" rows="2" maxlength="1200" placeholder="例：カフェラテ1杯、チョコ2個"></textarea></label>
 </div><button type="submit">AIでカロリーを試算</button></form>
-<div id="meal-estimate-result" class="notice" hidden><div id="meal-estimate-summary"></div><div class="row"><button type="button" id="meal-to-daily">その日の摂取に反映</button><button type="button" id="meal-to-standard" class="secondary">標準摂取に反映</button></div><p class="muted">反映後もまだ保存されません。活動・摂取量または減量計画の保存内容を確認してください。</p></div>
+<div id="meal-estimate-result" class="notice" role="status" aria-live="polite" hidden><div id="meal-estimate-summary"></div></div>
 </details>
 <div id="energy-notices"></div><div class="row"><h3>エネルギー履歴</h3><label>表示範囲<select id="energy-range"><option value="90">直近90日</option><option value="365">直近1年</option><option value="all">全期間</option></select></label></div><div id="energy-chart"></div><details><summary>活動・消費・摂取の記録</summary><div id="activity-list"></div></details></div>
 <div class="card energy-panel"><div class="plan-heading"><h2>週次の減量計画</h2><div class="plan-actions"><button id="plan-info" type="button" class="icon-button secondary" aria-label="代謝変化を含む試算の説明" title="試算の説明"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg></button><button id="plan-ai" type="button" class="secondary ai-guide-button" title="AIで目標達成方法を分析"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m12 2 1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5Z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8Z"/></svg><span>AIで達成方法を分析</span></button></div></div>

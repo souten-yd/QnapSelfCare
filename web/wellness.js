@@ -45,7 +45,7 @@ $('ai-test').addEventListener('click',guarded(async()=>{
  catch(error){$('ai-test-result').textContent=error.message;throw error;}
 }));
 
-let energyData=null,wellnessSummaryData=null,mealEstimateResult=null;
+let energyData=null,wellnessSummaryData=null;
 const activityNumbers=['pal','steps','minutes','total_kcal','intake_kcal','target_kcal'];
 const planNumbers=['start_weight','goal_weight','pal','deficit_kcal','target_kcal','adaptation_pct','exercise_minutes','exercise_met'];
 const energyValue=(v,unit='')=>v==null?'—':v+unit;
@@ -157,10 +157,6 @@ $('plan-ai').addEventListener('click',guarded(async()=>{
 $('meal-estimate-form').addEventListener('submit',guarded(async()=>{
  const f=$('meal-estimate-form');const meals={date:f.elements.date.value,breakfast:f.elements.breakfast.value,lunch:f.elements.lunch.value,dinner:f.elements.dinner.value,snacks:f.elements.snacks.value};
  $('meal-estimate-result').hidden=false;$('meal-estimate-summary').textContent='AIで試算中…';
- mealEstimateResult=await api('/api/ai/meal-estimate',{meals});
- const parts=mealEstimateResult.meals.map(x=>`${x.name} 約${x.kcal} kcal${x.basis?'（'+x.basis+'）':''}`);
- const assumptions=mealEstimateResult.assumptions.length?' 前提：'+mealEstimateResult.assumptions.join(' / '):'';
- $('meal-estimate-summary').textContent=`合計 約${mealEstimateResult.total_kcal} kcal。${parts.join('、')}。${mealEstimateResult.summary||''}${assumptions} ［${mealEstimateResult.web_research_used?'AI接続先によるWeb参照あり':'Web参照なし／AI知識による概算'}］`;
+ try{const result=await api('/api/ai/meal-estimate',{meals});$('meal-estimate-summary').textContent=result.answer;}
+ catch(error){$('meal-estimate-summary').textContent='試算できませんでした: '+error.message;throw error;}
 }));
-$('meal-to-daily').addEventListener('click',()=>{if(!mealEstimateResult)return;const src=$('meal-estimate-form'),dst=$('activity-form');dst.elements.date.value=src.elements.date.value;dst.elements.intake_kcal.value=mealEstimateResult.total_kcal;dst.elements.reuse.value='once';dst.closest('details').open=true;dst.scrollIntoView({block:'center'});message('AI試算をその日の摂取欄へ反映しました。内容を確認して保存してください');});
-$('meal-to-standard').addEventListener('click',()=>{if(!mealEstimateResult)return;const f=$('weight-plan-form');f.elements.target_kcal.value=mealEstimateResult.total_kcal;$('weight-plan-editor').open=true;updatePlanPreview();f.elements.target_kcal.scrollIntoView({block:'center'});message('AI試算を標準摂取欄へ反映しました。計画を確認して保存してください');});

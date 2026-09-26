@@ -150,53 +150,18 @@ class Coach:
         config = self.settings()
         if not config['base_url']:
             raise ValueError('AI接続先を設定してください')
-        schema = {'total_kcal': 0, 'meals': [{'name': '朝食', 'kcal': 0, 'basis': '量や品目の前提'}],
-                  'assumptions': ['推定上の前提'], 'web_research_used': False, 'summary': '短い説明'}
-        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 700,
+        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 1400,
                   'messages': [{'role': 'system', 'content':
                       'あなたは食事内容から1日摂取カロリーを概算する補助者です。医療診断や断定的な栄養処方はしません。'
                       '量が不明なら一般的な一人前を仮定し、幅が大きい場合は前提を明示してください。'
                       '接続先にWeb検索機能が実際にある場合だけ、必要に応じてメーカー・飲食店・公的栄養情報を参照してください。'
-                      'Webを使っていないのに使ったと主張しないでください。JSON以外は出力しないでください。'},
-                    {'role': 'user', 'content': json.dumps({'task':'朝昼夕・間食から総摂取カロリーを概算',
-                       'input': cleaned, 'required_json_shape': schema}, ensure_ascii=False)}]}
+                      'Webを使っていないのに使ったと主張しないでください。日本語の読みやすい文章で答え、JSONは出力しないでください。'
+                      '入力された食事ごとに各品目の量と推定kcalを列挙し、食事ごとの小計と1日の合計kcalを最後に示してください。'
+                      '量が不明な品目の仮定と、推定値の不確かさを簡潔に示してください。食べていない食事は追加しないでください。'},
+                    {'role': 'user', 'content': json.dumps({'task':'品目別、食事別、1日合計のカロリーを文章で概算',
+                       'input': cleaned}, ensure_ascii=False)}]}
         result = self._complete(config, prompt)
-        raw = result['answer'].strip().replace(chr(96)*3 + 'json', '').replace(chr(96)*3, '').strip()
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as error:
-            match = re.search(r'\{.*\}', raw, re.S)
-            if not match:
-                raise ValueError('AIの食事試算を数値として読み取れませんでした。内容を具体化して再試行してください') from error
-            try:
-                value = json.loads(match.group(0))
-            except json.JSONDecodeError as nested:
-                raise ValueError('AIの食事試算を数値として読み取れませんでした。内容を具体化して再試行してください') from nested
-        if not isinstance(value, dict):
-            raise ValueError('AIの食事試算形式が不正です')
-        total = value.get('total_kcal')
-        if isinstance(total, bool) or not isinstance(total, (int, float)) or not 0 <= total <= 15000:
-            raise ValueError('AIの総摂取カロリーが不正です')
-        meals = value.get('meals', [])
-        if not isinstance(meals, list) or len(meals) > 12:
-            raise ValueError('AIの食事内訳が不正です')
-        normalized = []
-        for item in meals:
-            if not isinstance(item, dict):
-                raise ValueError('AIの食事内訳が不正です')
-            name, kcal, basis = item.get('name', ''), item.get('kcal'), item.get('basis', '')
-            if not isinstance(name, str) or len(name) > 40 or isinstance(kcal, bool) or not isinstance(kcal, (int, float)) or not 0 <= kcal <= 10000 or not isinstance(basis, str):
-                raise ValueError('AIの食事内訳が不正です')
-            normalized.append({'name': name[:40], 'kcal': round(kcal), 'basis': basis[:300]})
-        assumptions = value.get('assumptions', [])
-        if not isinstance(assumptions, list) or any(not isinstance(x, str) for x in assumptions):
-            assumptions = []
-        summary = value.get('summary', '')
-        if not isinstance(summary, str):
-            summary = ''
-        return {'total_kcal': round(total), 'meals': normalized, 'assumptions': [x[:300] for x in assumptions[:8]],
-                'web_research_used': value.get('web_research_used') is True, 'summary': summary[:1000],
-                'provider': result['provider'], 'model': result['model']}
+        return result
     def test_connection(self):
         config = self.settings()
         return self._complete(config, {'model': config['model'], 'stream': False, 'max_tokens': 16,

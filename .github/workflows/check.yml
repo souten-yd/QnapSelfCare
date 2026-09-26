@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.19 >/dev/null 2>&1; then
-            echo 'Release v0.3.19 already exists; leaving it unchanged.'
+          if gh release view v0.3.20 >/dev/null 2>&1; then
+            echo 'Release v0.3.20 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.19 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.19' \
-            --notes 'Clarify the target line versus the metabolic-change simulation; add standard activity and exercise inputs, projected goal gap and required energy difference, AI-assisted plan review, and AI meal calorie estimates that can be reviewed before applying to daily or standard intake.' \
+          gh release create v0.3.20 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.20' \
+            --notes 'Display AI meal calorie estimates as a readable chat response with per-item, per-meal and daily totals; remove daily and standard intake autofill actions.' \
             --target "$GITHUB_SHA"
