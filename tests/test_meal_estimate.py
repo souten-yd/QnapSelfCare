@@ -16,19 +16,14 @@ class MealEstimateTests(unittest.TestCase):
         self.coach = Coach(self.tmp.name, self.store)
         self.coach.save({'provider':'local','base_url':'http://localhost:8765/v1','model':'auto'})
 
-    def test_meal_estimate_sends_only_meal_text_and_validates_json(self):
+    def test_meal_estimate_returns_prose_without_parsing_or_health_context(self):
         captured = {}
         class Response:
             def __enter__(self): return self
             def __exit__(self, *args): pass
             def read(self, size):
-                return json.dumps({'choices':[{'message':{'content':json.dumps({
-                    'total_kcal': 1820,
-                    'meals':[{'name':'朝食','kcal':420,'basis':'一般的な一人前'}],
-                    'assumptions':['量は標準量を仮定'],
-                    'web_research_used':False,
-                    'summary':'概算です'
-                }, ensure_ascii=False)}}]}).encode()
+                return json.dumps({'choices':[{'message':{'content':
+                    '朝食: トースト 200 kcal、卵 80 kcal。小計 280 kcal。\n昼食: 700 kcal。\n夕食: 600 kcal。\n間食: 100 kcal。\n合計 1680 kcal。'}}]}, ensure_ascii=False).encode()
         class Opener:
             def open(self, request, timeout):
                 captured['payload'] = json.loads(request.data)
@@ -36,11 +31,13 @@ class MealEstimateTests(unittest.TestCase):
         with patch('wellness_ai.build_opener', return_value=Opener()):
             result = self.coach.estimate_meal({'date':'2026-09-26','breakfast':'トーストと卵',
                 'lunch':'カレーライス','dinner':'焼き魚定食','snacks':'コーヒー'})
-        self.assertEqual(result['total_kcal'], 1820)
+        self.assertIn('トースト 200 kcal', result['answer'])
+        self.assertIn('合計 1680 kcal', result['answer'])
         wire = json.dumps(captured['payload'], ensure_ascii=False)
         self.assertIn('トーストと卵', wire)
         self.assertNotIn('measurements', wire)
-        self.assertFalse(result['web_research_used'])
+        self.assertIn('品目', wire)
+        self.assertNotIn('required_json_shape', wire)
 
     def test_meal_estimate_rejects_empty(self):
         with self.assertRaises(ValueError):

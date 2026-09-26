@@ -153,7 +153,7 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 .meal-estimate-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
 .meal-estimate-grid label:first-child{grid-column:1/-1}
 .meal-estimate-grid textarea{min-height:74px;resize:vertical}
-#meal-estimate-result .row{margin-top:10px}
+#meal-estimate-summary{white-space:pre-wrap;overflow-wrap:anywhere;max-height:40rem;overflow:auto}
 @media(max-width:700px){
  .plan-heading{align-items:flex-start}.plan-actions{width:100%}.plan-actions #plan-ai{flex:1}
  .plan-analysis-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
