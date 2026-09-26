@@ -235,6 +235,10 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.server.coach.set_key(body['provider'], body['key'])
                 elif path == '/api/ai/test':
                     result = self.server.coach.test_connection()
+                elif path == '/api/ai/meal-estimate':
+                    if set(body) != {'meals'}:
+                        raise ValueError('食事試算の内容を指定してください')
+                    result = self.server.coach.estimate_meal(body['meals'])
                 elif path == '/api/ai/consult':
                     if set(body) not in ({'user_id', 'mode', 'question'}, {'user_id', 'mode', 'question', 'consent'}):
                         raise ValueError('相談内容を指定してください')
