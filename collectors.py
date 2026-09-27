@@ -121,9 +121,10 @@ class CollectorManager:
     def submit(self, action, device_id=None, adapter="hci0", exclusive=False, transport="homehub", diagnostic=False, automatic=False, watch_ticket=None):
         self.store.require_available()
         if not isinstance(diagnostic, bool) or (diagnostic and action not in ('pair', 'sync')):
-            raise ValueError('詳細診断は手動のペアリング・履歴同期でのみ使用できます')
+            raise ValueError('詳細診断はペアリング・履歴同期でのみ使用できます')
         if action not in ("scan", "pair", "sync"):
             raise ValueError("対応していない操作です")
+        diagnostic = diagnostic or (automatic and action == 'sync')
         device = self.store.device(device_id) if device_id else None
         if action != "scan":
             if device is None:
@@ -304,7 +305,10 @@ class CollectorManager:
                     if (device['id'] in self.listen_delayed or device['id'] in self.pending
                             or time.monotonic() < self.next_attempt.get(device['id'], 0)):
                         continue
-                    self.listen_delayed[device['id']] = {'due': time.monotonic()+60, 'attempt': 1,
+                    # HBF-228T is normally ready shortly after its measurement; waiting a
+                    # full minute can miss its advertising window. Keep the later retry.
+                    delay = 10 if device['model'] == 'HBF-228T' else 60
+                    self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
                                                         'signature': self.listen_signature(device)}
         except Exception as error:
             self.listen_ready = False
