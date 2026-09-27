@@ -245,7 +245,7 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as root:
                 store = Store(root)
                 user = store.save_user({'name': 'test'})
-                device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                device = store.save_device({'model': 'HEM-6232T', 'address': 'AA:BB:CC:DD:EE:FF',
                     'bindings': {'1': user['id']}, 'auto_sync': True})
                 store.pairing_key(device['address'], '11' * 16)
                 runner = Mock(return_value={'records': []})
@@ -282,7 +282,7 @@ class ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             store = Store(root)
             user = store.save_user({'name': 'test'})
-            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+            device = store.save_device({'model': 'HEM-6232T', 'address': 'AA:BB:CC:DD:EE:FF',
                 'bindings': {'1': user['id']}, 'auto_sync': True})
             store.pairing_key(device['address'], '11' * 16)
             runner = Mock(side_effect=[BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください',
@@ -291,20 +291,160 @@ class ProtocolTests(unittest.TestCase):
             response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
             with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=100) as clock:
                 manager.schedule()
-                self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 10)
-                clock.return_value = 110
+                self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 60)
+                clock.return_value = 160
                 manager.schedule()
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'skipped')
                 self.assertTrue(runner.call_args.args[0]['diagnostic'])
                 self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['stage'], 'discovery')
                 self.assertTrue(manager.listen_delayed)
-                clock.return_value = 170
+                clock.return_value = 220
                 manager.schedule()
                 manager.process(manager.queue.get_nowait())
                 self.assertTrue(any(j['state'] == 'done' and '再試行' in j['message'] for j in store.jobs()))
                 self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['stage'], 'read')
                 self.assertFalse(manager.listen_delayed)
+
+    def test_hbf_listener_starts_immediately_without_timed_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            user = store.save_user({'name': 'test'})
+            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+                'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 300})
+            store.pairing_key(device['address'], '11' * 16)
+            missing = '機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'
+            runner = Mock(side_effect=[BluetoothFailure(missing, {'stage': 'discovery', 'elapsed_since_advert_ms': 900}),
+                                       BluetoothFailure('read timeout', {'stage': 'read'}),
+                                       {'records': [], 'diagnostic': {'stage': 'completed'}}])
+            manager = CollectorManager(store, runner=runner)
+            advert = 1_790_000_000_000
+            response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': advert}]}
+            with patch('collectors.bridge_request', return_value=response), \
+                    patch('collectors.time.monotonic', return_value=100) as clock, \
+                    patch('collectors.time.time', return_value=advert / 1000 + 1.5):
+                manager.schedule()
+                # Queued in the same tick as the detection; no 10-second wait.
+                self.assertEqual(manager.queue.qsize(), 1)
+                self.assertFalse(manager.listen_delayed)
+                manager.process(manager.queue.get_nowait())
+                request = runner.call_args.args[0]
+                self.assertEqual(request['advert_at'], advert)
+                job = store.jobs()[0]
+                self.assertEqual(job['state'], 'skipped')
+                self.assertIn('再試行せず', job['message'])
+                self.assertNotIn('60秒後', job['message'])
+                listen = json.loads(job['result'])['diagnostic']['listen']
+                self.assertEqual(listen, {'attempt': 1, 'advert_at': advert, 'request_after_advert_ms': 1500})
+                self.assertFalse(manager.listen_delayed)
+                # A missed scale does not wait out the 300-second minimum interval:
+                # the next advertisement (next measurement) starts at once.
+                clock.return_value = 105
+                manager.schedule()
+                self.assertEqual(manager.queue.qsize(), 0)  # Same event is already consumed.
+                response['events'][0]['at'] = advert + 5000
+                clock.return_value = 108  # Listener polls every 2 seconds.
+                manager.schedule()
+                self.assertEqual(manager.queue.qsize(), 1)
+                manager.process(manager.queue.get_nowait())
+                self.assertEqual(store.jobs()[0]['state'], 'failed')
+                self.assertFalse(manager.listen_delayed)
+                # Other failures keep the normal cooldown.
+                response['events'][0]['at'] = advert + 10000
+                clock.return_value = 111
+                manager.schedule()
+                self.assertEqual(manager.queue.qsize(), 0)
+                response['events'][0]['at'] = advert + 20000
+                clock.return_value = 410  # 108 + 300-second interval
+                manager.schedule()
+                manager.process(manager.queue.get_nowait())
+                self.assertEqual(store.jobs()[0]['state'], 'done')
+                self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['listen']['attempt'], 1)
+                self.assertEqual(runner.call_count, 3)
+
+    def test_worker_connects_to_cached_bluez_device_without_scanning(self):
+        import sys
+        import types
+        import ble_worker
+
+        class Reply:
+            message_type = 'ok'
+            body = []
+
+        class Bus:
+            async def connect(self):
+                return self
+            async def call(self, message):
+                return Reply()
+            def disconnect(self):
+                pass
+
+        dbus = types.ModuleType('dbus_fast')
+        dbus.BusType = types.SimpleNamespace(SYSTEM=1)
+        dbus.MessageType = types.SimpleNamespace(ERROR='error')
+        dbus.Message = lambda **kwargs: kwargs
+        dbus.Variant = lambda *args: args
+        dbus_aio = types.ModuleType('dbus_fast.aio')
+        dbus_aio.MessageBus = lambda **kwargs: Bus()
+
+        class BleakError(Exception):
+            pass
+
+        def modules(connect_error=None):
+            bleak = types.ModuleType('bleak')
+            bleak.BleakScanner = types.SimpleNamespace(find_device_by_address=AsyncMock(return_value=None))
+            client = AsyncMock()
+            client.connect.side_effect = connect_error
+            client.services = Mock()
+            client.services.get_service.return_value = None  # Stop right after connecting.
+            bleak.BleakClient = Mock(return_value=client)
+            exc = types.ModuleType('bleak.exc')
+            exc.BleakError = BleakError
+            backends = types.ModuleType('bleak.backends')
+            device_mod = types.ModuleType('bleak.backends.device')
+            device_mod.BLEDevice = lambda address, name, details, rssi: types.SimpleNamespace(address=address, details=details)
+            return {'dbus_fast': dbus, 'dbus_fast.aio': dbus_aio, 'bleak': bleak, 'bleak.exc': exc,
+                    'bleak.backends': backends, 'bleak.backends.device': device_mod}, bleak, client
+
+        request = {'action': 'sync', 'adapter': 'hci0', 'advert_at': 1_790_000_000_000,
+                   'device': {'address': 'AA:BB:CC:DD:EE:FF', 'model': 'HBF-228T'}}
+        agent = AsyncMock(return_value=None)
+        cached = AsyncMock(return_value=('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF', {'Paired': True, 'Bonded': True}))
+        fake, bleak, client = modules()
+        trace = {'stage': 'starting', 'slots': []}
+        with patch.dict(sys.modules, fake), patch.object(ble_worker, 'register_agent', agent), \
+                patch.object(ble_worker, 'cached_device', cached), \
+                patch('ble_worker.time.time', return_value=1_790_000_002.0):
+            with self.assertRaisesRegex(ValueError, '対応するOmronサービス'):
+                asyncio.run(ble_worker.operate(request, trace))
+        bleak.BleakScanner.find_device_by_address.assert_not_awaited()
+        target = bleak.BleakClient.call_args.args[0]
+        self.assertEqual(target.details['path'], '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF')
+        client.disconnect.assert_awaited()
+        self.assertEqual(trace['discovery_method'], 'bluez_cache')
+        self.assertEqual(trace['elapsed_since_advert_ms'], 2000)
+        self.assertEqual(trace['bluez_cached'], {'paired': True, 'bonded': True, 'connected': False})
+        self.assertIn('connect_ms', trace)
+
+        # No connectable advertisement during the connect wait is reported as "not found".
+        fake, bleak, client = modules(asyncio.TimeoutError())
+        trace = {'stage': 'starting', 'slots': []}
+        with patch.dict(sys.modules, fake), patch.object(ble_worker, 'register_agent', agent), \
+                patch.object(ble_worker, 'cached_device', cached):
+            with self.assertRaisesRegex(ValueError, '^機器が見つかりません'):
+                asyncio.run(ble_worker.operate(request, trace))
+        self.assertEqual(trace['stage'], 'connection')
+
+        # Without a BlueZ object the worker falls back to discovery.
+        fake, bleak, client = modules()
+        trace = {'stage': 'starting', 'slots': []}
+        with patch.dict(sys.modules, fake), patch.object(ble_worker, 'register_agent', agent), \
+                patch.object(ble_worker, 'cached_device', AsyncMock(return_value=(None, {}))):
+            with self.assertRaisesRegex(ValueError, '^機器が見つかりません'):
+                asyncio.run(ble_worker.operate(request, trace))
+        bleak.BleakScanner.find_device_by_address.assert_awaited_once()
+        self.assertEqual((trace['stage'], trace['discovery_method']), ('discovery', 'scan'))
+        self.assertIn('discovery_ms', trace)
 
     def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):
         with tempfile.TemporaryDirectory() as root:

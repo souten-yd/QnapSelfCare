@@ -165,6 +165,8 @@ class CollectorManager:
         identifier, pending_key, action, device, adapter, transport, diagnostic, automatic = item
         self.store.update_job(identifier, "running", "Bluetooth処理を実行しています")
         trace = None
+        listen_info = None
+        cooldown = None
         with self.lock:
             watch_ticket = self.listen_jobs.pop(identifier, None)
         try:
@@ -182,6 +184,15 @@ class CollectorManager:
             request = {"action": action, "device": device, "adapter": adapter, "transport": transport}
             if diagnostic:
                 request['diagnostic'] = True
+            listen_info = None
+            if watch_ticket is not None:
+                listen_info = {'attempt': watch_ticket['attempt']}
+                advert_at = watch_ticket.get('advert_at')
+                if isinstance(advert_at, (int, float)) and not isinstance(advert_at, bool) and advert_at > 0:
+                    # HomeHub reports the advertisement in wall-clock milliseconds.
+                    request['advert_at'] = advert_at
+                    listen_info['advert_at'] = advert_at
+                    listen_info['request_after_advert_ms'] = int(time.time() * 1000 - advert_at)
             if action == "pair":
                 # Preserve an attempted key separately until programming succeeds.
                 key_path = self.store.directory.parent / "config" / ("pair-" + device["id"] + ".json")
@@ -197,6 +208,8 @@ class CollectorManager:
             result = self.runner(request, self.store.directory)
             if diagnostic:
                 trace = result.get('diagnostic')
+                if listen_info and isinstance(trace, dict):
+                    trace = dict(trace, listen=listen_info)
             if result.get("error"):
                 raise ValueError(result["error"])
             if action == "pair":
@@ -219,6 +232,8 @@ class CollectorManager:
             self.store.update_job(identifier, "done", message, result, automatic=automatic and action == "sync")
         except Exception as error:
             trace = getattr(error, 'diagnostic', None) or trace
+            if watch_ticket is not None and diagnostic:
+                trace = dict(trace if isinstance(trace, dict) else {'stage': 'unknown'}, listen=listen_info)
             # The peer is another local service, but do not persist unbounded or malformed diagnostics.
             if diagnostic and isinstance(trace, dict):
                 encoded = json.dumps(trace, ensure_ascii=False)
@@ -227,11 +242,17 @@ class CollectorManager:
             else:
                 trace = None
             missing = str(error) == "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
+            if missing and watch_ticket is not None and device.get('model') == 'HBF-228T':
+                # The scale advertises only briefly after a measurement. Do not
+                # hold its next measurement behind the normal minimum interval.
+                cooldown = 0
             skipped = automatic and action == "sync" and missing
             message = "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__
             if watch_ticket is not None:
                 retry = False
-                if watch_ticket['attempt'] == 1 and not self.stop_event.is_set() and not self.store.error:
+                # A timed retry cannot reach a sleeping HBF-228T; wait for its next advertisement.
+                hbf = device.get('model') == 'HBF-228T'
+                if not hbf and watch_ticket['attempt'] == 1 and not self.stop_event.is_set() and not self.store.error:
                     current = self.store.device(device['id'])
                     if self.listen_signature(current) == watch_ticket['signature']:
                         with self.lock:
@@ -239,14 +260,19 @@ class CollectorManager:
                         retry = True
                 if skipped:
                     message = '機器が通信可能でないためスキップしました'
-                message += '。60秒後に1回だけ再試行を予約しました' if retry else '。今回の待ち受け同期を終了し、次の検知を待ちます'
+                if retry:
+                    message += '。60秒後に1回だけ再試行を予約しました'
+                elif hbf:
+                    message += '。HBF-228Tは測定後の通信時間が短いため再試行せず、次の測定時の検知を待ちます'
+                else:
+                    message += '。今回の待ち受け同期を終了し、次の検知を待ちます'
             self.store.update_job(identifier, "skipped" if skipped else "failed", message,
                                   {'diagnostic': trace} if trace else None)
         finally:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
-                self.next_attempt[device["id"]] = time.monotonic() + device["interval"]
+                self.next_attempt[device["id"]] = time.monotonic() + (device["interval"] if cooldown is None else cooldown)
 
     @staticmethod
     def listen_signature(device):
@@ -305,11 +331,12 @@ class CollectorManager:
                     if (device['id'] in self.listen_delayed or device['id'] in self.pending
                             or time.monotonic() < self.next_attempt.get(device['id'], 0)):
                         continue
-                    # HBF-228T is normally ready shortly after its measurement; waiting a
-                    # full minute can miss its advertising window. Keep the later retry.
-                    delay = 10 if device['model'] == 'HBF-228T' else 60
+                    # HBF-228T advertises only briefly after its measurement, so start
+                    # at once. HEM-6232T keeps the 60-second delay and one retry.
+                    delay = 0 if device['model'] == 'HBF-228T' else 60
                     self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
-                                                        'signature': self.listen_signature(device)}
+                                                        'signature': self.listen_signature(device),
+                                                        'advert_at': event}
         except Exception as error:
             self.listen_ready = False
             self.listen_error = '待ち受けに接続できません。HomeHub 0.3.5以降を確認してください: ' + str(error)
@@ -323,8 +350,9 @@ class CollectorManager:
             self.next_scan = 0
             self.next_watch = 0
             self.sync_day = today
-        self.dispatch_listen()
         self.listen()
+        # Dispatch after polling so a zero-delay reservation starts in the same tick.
+        self.dispatch_listen()
         if time.monotonic() < self.next_scan:
             return
         eligible = []
