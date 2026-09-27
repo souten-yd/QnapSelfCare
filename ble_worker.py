@@ -6,6 +6,7 @@ import fcntl
 import os
 import secrets
 import sys
+import time
 
 import ble_protocol as protocol
 
@@ -217,9 +218,40 @@ async def register_agent(address):
     return bus, manager, path
 
 
+MISSING = "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
+
+
+async def cached_device(address, adapter):
+    """Return BlueZ's existing object for a bonded device, without scanning.
+
+    The advertisement listener already saw the device on this BlueZ instance.
+    Connecting to the cached object lets BlueZ catch the next connectable
+    advertisement directly instead of spending it on a separate discovery.
+    """
+    from dbus_fast import BusType, Message, MessageType
+    from dbus_fast.aio import MessageBus
+    path = "/org/bluez/" + adapter + "/dev_" + address.upper().replace(":", "_")
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(Message(destination="org.bluez", path=path,
+            interface="org.freedesktop.DBus.Properties", member="GetAll", signature="s",
+            body=["org.bluez.Device1"]))
+    finally:
+        bus.disconnect()
+    if reply.message_type == MessageType.ERROR:
+        return None, {}
+    props = {key: getattr(value, "value", value) for key, value in reply.body[0].items()}
+    return path, props
+
+
+def elapsed_ms(started):
+    return int((time.monotonic() - started) * 1000)
+
+
 async def operate(request, trace=None):
     try:
         from bleak import BleakClient, BleakScanner
+        from bleak.exc import BleakError
     except ImportError:
         raise ValueError("USB Bluetooth用のbleakが未導入です。管理画面のセットアップ手順を確認してください") from None
     adapter = request.get("adapter", "hci0")
@@ -246,15 +278,48 @@ async def operate(request, trace=None):
     address = device["address"]
     if trace is not None:
         trace['stage'] = 'discovery'
-    found = await BleakScanner.find_device_by_address(address, timeout=20, adapter=adapter)
+        advert_at = request.get('advert_at')
+        if isinstance(advert_at, (int, float)) and not isinstance(advert_at, bool) and advert_at > 0:
+            trace['elapsed_since_advert_ms'] = int(time.time() * 1000 - advert_at)
+    started = time.monotonic()
+    found, method = None, 'scan'
+    if request["action"] == "sync":
+        path, props = await cached_device(address, adapter)
+        if path:
+            from bleak.backends.device import BLEDevice
+            found, method = BLEDevice(address, props.get("Name"), {"path": path, "props": props}, -127), 'bluez_cache'
+            if trace is not None:
+                trace['bluez_cached'] = {'paired': bool(props.get('Paired')), 'bonded': bool(props.get('Bonded')),
+                                         'connected': bool(props.get('Connected'))}
+    if trace is not None:
+        trace['discovery_method'] = method
+        trace['discovery_timeout_s'] = 20
     if found is None:
-        raise ValueError("機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください")
+        found = await BleakScanner.find_device_by_address(address, timeout=20, adapter=adapter)
+        if trace is not None:
+            trace['discovery_ms'] = elapsed_ms(started)
+        if found is None:
+            raise ValueError(MISSING)
     agent = None
     try:
         if trace is not None:
             trace['stage'] = 'connection'
         agent = await register_agent(address)
-        async with BleakClient(found, adapter=adapter, timeout=20) as client:
+        client = BleakClient(found, adapter=adapter, timeout=20)
+        connecting = time.monotonic()
+        try:
+            await client.connect()
+        except (asyncio.TimeoutError, BleakError):
+            if trace is not None:
+                trace['connect_ms'] = elapsed_ms(connecting)
+            # A cached object only means BlueZ knows the device. No connectable
+            # advertisement within the timeout is the same outcome as not found.
+            if method == 'bluez_cache':
+                raise ValueError(MISSING) from None
+            raise
+        if trace is not None:
+            trace['connect_ms'] = elapsed_ms(connecting)
+        try:
             if trace is not None:
                 trace['stage'] = 'service'
             if not client.services.get_service(protocol.SERVICE):
@@ -282,6 +347,8 @@ async def operate(request, trace=None):
                 trace['stage'] = 'completed'
                 result['diagnostic'] = trace
             return result
+        finally:
+            await client.disconnect()
     finally:
         if agent:
             bus, manager, path = agent

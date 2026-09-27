@@ -59,9 +59,7 @@ class DailySyncTests(unittest.TestCase):
             manager.schedule()
             self.assertIn(d['address'], bridge.call_args.args[1]['addresses'])
             self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
-            self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 10)
-            clock.return_value = 111
-            manager.schedule()
+            # HBF-228T starts in the same tick as the detection.
             manager.process(manager.queue.get_nowait())
             self.assertEqual(manager.runner.call_count, 2)
             self.assertTrue(self.store.device(d['id'])['automatic_synced_today'])
