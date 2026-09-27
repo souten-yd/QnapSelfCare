@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -173,7 +174,7 @@ class ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             store = Store(root)
             user = store.save_user({'name': 'test'})
-            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
+            device = store.save_device({'model': 'HEM-6232T', 'address': 'AA:BB:CC:DD:EE:FF',
                 'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 300})
             self.assertEqual(device['sync_mode'], 'listen')
             store.pairing_key(device['address'], '11' * 16)
@@ -284,20 +285,25 @@ class ProtocolTests(unittest.TestCase):
             device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
                 'bindings': {'1': user['id']}, 'auto_sync': True})
             store.pairing_key(device['address'], '11' * 16)
-            runner = Mock(side_effect=[BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'), {'records': []}])
+            runner = Mock(side_effect=[BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください',
+                {'stage': 'discovery'}), {'records': [], 'diagnostic': {'stage': 'read'}}])
             manager = CollectorManager(store, runner=runner)
             response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': 1234}]}
             with patch('collectors.bridge_request', return_value=response), patch('collectors.time.monotonic', return_value=100) as clock:
                 manager.schedule()
-                clock.return_value = 160
+                self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 10)
+                clock.return_value = 110
                 manager.schedule()
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'skipped')
+                self.assertTrue(runner.call_args.args[0]['diagnostic'])
+                self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['stage'], 'discovery')
                 self.assertTrue(manager.listen_delayed)
-                clock.return_value = 220
+                clock.return_value = 170
                 manager.schedule()
                 manager.process(manager.queue.get_nowait())
                 self.assertTrue(any(j['state'] == 'done' and '再試行' in j['message'] for j in store.jobs()))
+                self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['stage'], 'read')
                 self.assertFalse(manager.listen_delayed)
 
     def test_auto_sync_absence_waits_interval_and_errors_stay_errors(self):

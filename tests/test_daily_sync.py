@@ -28,7 +28,9 @@ class DailySyncTests(unittest.TestCase):
             manager = CollectorManager(self.store, runner=Mock(return_value={'records': []}))
             self.sync(manager, d, False)
             self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
+            self.assertNotIn('diagnostic', manager.runner.call_args.args[0])
             self.sync(manager, d, True)
+            self.assertTrue(manager.runner.call_args.args[0]['diagnostic'])
             self.assertTrue(self.store.device(d['id'])['automatic_synced_today'])
             self.assertFalse(self.store.device(other['id'])['automatic_synced_today'])
             reopened = Store(self.tmp.name)
@@ -57,8 +59,8 @@ class DailySyncTests(unittest.TestCase):
             manager.schedule()
             self.assertIn(d['address'], bridge.call_args.args[1]['addresses'])
             self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
-            self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 60)
-            clock.return_value = 161
+            self.assertEqual(manager.listener_status()['waiting'][0]['seconds'], 10)
+            clock.return_value = 111
             manager.schedule()
             manager.process(manager.queue.get_nowait())
             self.assertEqual(manager.runner.call_count, 2)
