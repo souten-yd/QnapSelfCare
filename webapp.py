@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.23"
+VERSION = "0.3.24"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -93,7 +93,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/wellness.js": ("wellness.js", "text/javascript; charset=utf-8"),
                   "/protection.js": ("protection.js", "text/javascript; charset=utf-8"),
                   "/update.js": ("update.js", "text/javascript; charset=utf-8"),
-                  "/icon.svg": ("icon.svg", "image/svg+xml")}
+                  "/icon.svg": ("icon.svg", "image/svg+xml"),
+                  "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png")}
         if path in static:
             name, mime = static[path]
             self._send(200, (ROOT / "web" / name).read_bytes(), mime)

@@ -41,7 +41,14 @@ class WebAppTests(unittest.TestCase):
 
     def test_open_dashboard_and_status(self):
         with self.request('/') as response:
-            self.assertIn('QnapSelfCare', response.read().decode())
+            html = response.read().decode()
+            self.assertIn('QnapSelfCare', html)
+            self.assertIn('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"', html)
+        with self.request('/apple-touch-icon.png') as response:
+            png = response.read()
+            self.assertEqual(response.headers['Content-Type'], 'image/png')
+            self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
+            self.assertEqual((int.from_bytes(png[16:20], 'big'), int.from_bytes(png[20:24], 'big')), (180, 180))
         with self.request('/api/status') as response:
             data = json.load(response)
         self.assertEqual(data['record_count'], 0)
