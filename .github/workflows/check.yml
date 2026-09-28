@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.23 >/dev/null 2>&1; then
-            echo 'Release v0.3.23 already exists; leaving it unchanged.'
+          if gh release view v0.3.24 >/dev/null 2>&1; then
+            echo 'Release v0.3.24 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.23 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.23' \
-            --notes 'HBF-228T listener sync starts immediately after detection, connects to the bonded BlueZ device without a second scan (QnapHomeHub 0.3.6), skips the timed retry and reports advertisement-to-sync timing in diagnostics.' \
+          gh release create v0.3.24 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.24' \
+            --notes 'Provide the existing SelfCare icon as an Apple touch icon for iPhone home-screen shortcuts.' \
             --target "$GITHUB_SHA"
