@@ -345,18 +345,32 @@ class CollectorManager:
             self.listen_ready = bool(result.get('ready'))
             self.listen_error = result.get('error')
             events = {e['address']: e['at'] for e in result.get('events', [])}
-            self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in {d['id'] for d in devices}}
+            active_ids = {d['id'] for d in devices}
+            self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in active_ids}
+            self.listen_bursts = {k: v for k, v in self.listen_bursts.items() if k in active_ids}
             for device in devices:
                 event = events.get(device['address'])
                 if event is None or event <= self.listen_seen.get(device['id'], 0):
                     continue
-                # Consume newer advertisements during waiting/cooldown; never extend a reservation.
                 self.listen_seen[device['id']] = event
                 with self.lock:
+                    burst = self.listen_bursts.setdefault(device['id'], {})
+                    last_event = burst.get('last_event_at')
+                    synced_at = burst.get('synced_at')
+                    quiet_gap = last_event is not None and event - last_event >= 90000
+                    safety_probe = synced_at is not None and event - synced_at >= 600000
+                    new_burst = last_event is None or quiet_gap or safety_probe
+                    burst['last_event_at'] = event
+                    if new_burst:
+                        burst['synced'] = False
+                        burst['blocked'] = False
+                        burst['started_at'] = event
+                    if (burst.get('synced') or burst.get('blocked')) and not new_burst:
+                        continue
                     if device['id'] in self.listen_delayed or device['id'] in self.pending:
                         continue
-                    # HBF-228T advertises only briefly after its measurement, so start
-                    # at once. HEM-6232T keeps the 60-second delay and one retry.
+                    # HBF-228T connects immediately. HEM-6232T keeps the
+                    # measured-data-friendly 60-second debounce and one retry.
                     delay = 0 if device['model'] == 'HBF-228T' else 60
                     self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
                                                         'signature': self.listen_signature(device),
