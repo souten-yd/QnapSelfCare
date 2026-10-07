@@ -37,7 +37,7 @@ class DailySyncTests(unittest.TestCase):
             self.assertFalse(self.store.device(other['id'])['automatic_synced_today'])
             reopened = Store(self.tmp.name)
             restarted = CollectorManager(reopened, runner=Mock(return_value={'records': []}))
-            with self.assertRaisesRegex(ValueError, '本日の自動同期'):
+            with self.assertRaisesRegex(ValueError, '本日の周期検索'):
                 restarted.submit('sync', d['id'], automatic=True)
             for _ in range(3):
                 self.sync(restarted, d, False)
@@ -87,7 +87,8 @@ class DailySyncTests(unittest.TestCase):
             with patch('collectors.time.monotonic', return_value=100):
                 manager.schedule()
             self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
-            self.assertNotIn(d['id'], manager.next_attempt)
+            self.assertEqual(manager.runner.call_count, 2)
+            self.assertLess(manager.next_attempt[d['id']], 999999)
 
     def test_interval_scan_stops_after_success_and_failures_do_not_consume_day(self):
         d = self.devices[0]
