@@ -347,7 +347,8 @@ class ProtocolTests(unittest.TestCase):
                 manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
-                self.assertEqual(store.jobs()[0]['state'], 'failed')
+                self.assertEqual(store.jobs()[0]['state'], 'skipped')
+                self.assertIn('次の新しいBluetooth広告', store.jobs()[0]['message'])
                 self.assertFalse(manager.listen_delayed)
                 # A connection-stage miss also keeps the HBF retry window open
                 # for the next fresh advertisement instead of imposing cooldown.
