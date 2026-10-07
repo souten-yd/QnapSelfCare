@@ -289,8 +289,20 @@ async def operate(request, trace=None):
             from bleak.backends.device import BLEDevice
             found, method = BLEDevice(address, props.get("Name"), {"path": path, "props": props}, -127), 'bluez_cache'
             if trace is not None:
-                trace['bluez_cached'] = {'paired': bool(props.get('Paired')), 'bonded': bool(props.get('Bonded')),
-                                         'connected': bool(props.get('Connected'))}
+                trace['bluez_cached'] = {
+                    'object_path': path,
+                    'address': props.get('Address') or address,
+                    'address_type': props.get('AddressType'),
+                    'name': props.get('Name'),
+                    'paired': bool(props.get('Paired')),
+                    'bonded': bool(props.get('Bonded')),
+                    'trusted': bool(props.get('Trusted')),
+                    'blocked': bool(props.get('Blocked')),
+                    'connected': bool(props.get('Connected')),
+                    'services_resolved': bool(props.get('ServicesResolved')),
+                    'connectable': props.get('Connectable'),
+                    'rssi': props.get('RSSI'),
+                }
     if trace is not None:
         trace['discovery_method'] = method
         trace['discovery_timeout_s'] = 20
@@ -305,20 +317,36 @@ async def operate(request, trace=None):
         if trace is not None:
             trace['stage'] = 'connection'
         agent = await register_agent(address)
-        client = BleakClient(found, adapter=adapter, timeout=20)
+        advert_at = request.get('advert_at')
+        fresh_hbf_watch = (device.get('model') == 'HBF-228T'
+                           and isinstance(advert_at, (int, float)) and not isinstance(advert_at, bool)
+                           and advert_at > 0)
+        # Listener-triggered HBF connections should fail fast enough to catch a
+        # subsequent connectable advertisement. Manual/pairing and other devices
+        # keep the conservative timeout for older QNAP/BlueZ stacks.
+        connection_timeout = 8 if fresh_hbf_watch else 20
+        client = BleakClient(found, adapter=adapter, timeout=connection_timeout)
+        if trace is not None:
+            trace['connection_timeout_s'] = connection_timeout
         connecting = time.monotonic()
         try:
             await client.connect()
-        except (asyncio.TimeoutError, BleakError):
+        except (asyncio.TimeoutError, BleakError) as error:
             if trace is not None:
                 trace['connect_ms'] = elapsed_ms(connecting)
-            # A cached object only means BlueZ knows the device. No connectable
-            # advertisement within the timeout is the same outcome as not found.
+                trace['connect_error'] = {
+                    'type': type(error).__name__,
+                    'message': (str(error) or type(error).__name__)[:160],
+                }
+            # A cached object only means BlueZ knows the device. If it never
+            # becomes connectable during this bounded attempt, let the listener
+            # wait for a fresh advertisement and try again without a timed retry.
             if method == 'bluez_cache':
                 raise ValueError(MISSING) from None
             raise
         if trace is not None:
             trace['connect_ms'] = elapsed_ms(connecting)
+            trace['connected_transition'] = bool(client.is_connected)
         try:
             if trace is not None:
                 trace['stage'] = 'service'
@@ -366,7 +394,7 @@ def main():
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         request = json.loads(sys.stdin.read(65536))
         if request.get('action') in ('pair', 'sync') and request.get('diagnostic') is True:
-            trace = {'stage': 'starting', 'slots': [], 'protocol_revision': 3, 'rx_notifications': 0}
+            trace = {'stage': 'starting', 'slots': [], 'protocol_revision': 4, 'rx_notifications': 0}
         result = asyncio.run(asyncio.wait_for(operate(request, trace), 180))
         print(json.dumps(result))
     except Exception as error:
