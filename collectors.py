@@ -284,7 +284,12 @@ class CollectorManager:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
-                self.next_attempt[device["id"]] = time.monotonic() + (device["interval"] if cooldown is None else cooldown)
+                # Listener mode is driven by distinct device advertisements, not
+                # by a polling interval. Never suppress a later notification.
+                if watch_ticket is not None:
+                    self.next_attempt.pop(device["id"], None)
+                else:
+                    self.next_attempt[device["id"]] = time.monotonic() + (device["interval"] if cooldown is None else cooldown)
 
     @staticmethod
     def listen_signature(device):
@@ -339,8 +344,7 @@ class CollectorManager:
                 # Consume newer advertisements during waiting/cooldown; never extend a reservation.
                 self.listen_seen[device['id']] = event
                 with self.lock:
-                    if (device['id'] in self.listen_delayed or device['id'] in self.pending
-                            or time.monotonic() < self.next_attempt.get(device['id'], 0)):
+                    if device['id'] in self.listen_delayed or device['id'] in self.pending:
                         continue
                     # HBF-228T advertises only briefly after its measurement, so start
                     # at once. HEM-6232T keeps the 60-second delay and one retry.
