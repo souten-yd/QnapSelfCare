@@ -315,7 +315,7 @@ class ProtocolTests(unittest.TestCase):
             store.pairing_key(device['address'], '11' * 16)
             missing = '機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'
             runner = Mock(side_effect=[BluetoothFailure(missing, {'stage': 'discovery', 'elapsed_since_advert_ms': 900}),
-                                       BluetoothFailure('read timeout', {'stage': 'read'}),
+                                       BluetoothFailure(missing, {'stage': 'connection', 'connect_ms': 8001}),
                                        {'records': [], 'diagnostic': {'stage': 'completed'}}])
             manager = CollectorManager(store, runner=runner)
             advert = 1_790_000_000_000
