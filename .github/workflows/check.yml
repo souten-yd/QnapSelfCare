@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.27 >/dev/null 2>&1; then
-            echo 'Release v0.3.27 already exists; leaving it unchanged.'
+          if gh release view v0.3.28 >/dev/null 2>&1; then
+            echo 'Release v0.3.28 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.27 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.27' \
-            --notes 'Persist overview date-range filters across reloads and replace the BMI-only card with a compact BMI/body-fat/skeletal-muscle/visceral-fat summary.' \
+          gh release create v0.3.28 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.28' \
+            --notes 'Shorten the visceral-fat label and make all four latest body-composition numeric values the same visual size.' \
             --target "$GITHUB_SHA"

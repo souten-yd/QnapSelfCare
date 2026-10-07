@@ -172,6 +172,7 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 .body-summary-card>.body-summary>div{min-width:0;padding:7px 0}
 .body-summary-card>.body-summary small{font-size:11px;color:var(--muted)}
 .body-summary-card>.body-summary strong{font-size:24px;line-height:1.2;margin:3px 0 0;letter-spacing:-.5px;white-space:nowrap}
+.body-summary-card>.body-summary strong>span{font-size:inherit}
 .body-summary-card>.body-summary strong small{display:inline;font-size:10px;margin-left:2px}
 @media(max-width:700px){
  .body-summary-card>.body-summary{gap:5px 8px;margin-top:7px}
