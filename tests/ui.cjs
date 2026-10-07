@@ -95,6 +95,10 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.equal(d.getElementById('latest-body-fat').textContent,'28.4');
  assert.equal(d.getElementById('latest-muscle').textContent,'30.0');
  assert.equal(d.getElementById('latest-visceral-fat').textContent,'17');
+ assert.match(d.querySelector('.body-summary-card').textContent,/内臓脂肪/);
+ assert.equal(d.querySelector('.body-summary-card').textContent.includes('内臓脂肪レベル'),false);
+ const bodySummaryCss=fs.readFileSync('web/styles.css','utf8');
+ assert.match(bodySummaryCss,/\.body-summary-card>\.body-summary strong>span\{font-size:inherit\}/);
  assert.equal(d.querySelector('.body-summary-card').textContent.includes('DOM Test'),false);
  assert.equal(d.querySelector('.body-summary-card').textContent.includes('2021'),false);
  await w.fetch('/api/records',{method:'POST',headers:{'Content-Type':'application/json','X-SelfCare-Request':'1'},body:JSON.stringify({user_id:d.getElementById('current-user').value,kind:'body_composition',measured_at:'2026-09-25T10:00:00Z',values:{weight:81}})});
