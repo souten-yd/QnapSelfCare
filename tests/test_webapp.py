@@ -39,6 +39,14 @@ class WebAppTests(unittest.TestCase):
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
+    def test_release_versions_are_aligned(self):
+        root = Path(__file__).resolve().parents[1]
+        qpkg = (root / 'qpkg' / 'qpkg.cfg').read_text()
+        workflow = (root / '.github' / 'workflows' / 'check.yml').read_text()
+        self.assertIn(f'QPKG_VER="{webapp.VERSION}"', qpkg)
+        self.assertIn(f'gh release view v{webapp.VERSION}', workflow)
+        self.assertIn(f"--title 'QnapSelfCare {webapp.VERSION}'", workflow)
+
     def test_open_dashboard_and_status(self):
         with self.request('/') as response:
             html = response.read().decode()
