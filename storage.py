@@ -334,8 +334,9 @@ class Store:
             completed = {r['device_id']: r['completed_at'] for r in db.execute('SELECT * FROM automatic_sync_days')}
             today = sync_day()
             for device in result:
-                device['automatic_synced_today'] = sync_day(completed[device['id']]) == today if device['id'] in completed else False
                 device.setdefault("sync_mode", "listen" if device["transport"] == "homehub" else "interval")
+                device['automatic_synced_today'] = (device['sync_mode'] != 'listen' and device['id'] in completed
+                                                    and sync_day(completed[device['id']]) == today)
                 device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
         return result
 
