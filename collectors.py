@@ -242,16 +242,22 @@ class CollectorManager:
             else:
                 trace = None
             missing = str(error) == "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
-            if missing and watch_ticket is not None and device.get('model') == 'HBF-228T':
-                # The scale advertises only briefly after a measurement. Do not
-                # hold its next measurement behind the normal minimum interval.
+            hbf = watch_ticket is not None and device.get('model') == 'HBF-228T'
+            failure_stage = str(trace.get('stage', 'unknown')) if isinstance(trace, dict) else 'unknown'
+            # For HBF-228T, discovery/connection failures mean we missed a
+            # connectable advertisement, not that the measurement session is
+            # invalid. Do not impose the normal interval; a fresh advertisement
+            # can immediately trigger another bounded connection attempt.
+            hbf_advert_retry = hbf and (missing or failure_stage in ('discovery', 'connection'))
+            if hbf_advert_retry:
                 cooldown = 0
             skipped = automatic and action == "sync" and missing
             message = "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__
             if watch_ticket is not None:
                 retry = False
-                # A timed retry cannot reach a sleeping HBF-228T; wait for its next advertisement.
-                hbf = device.get('model') == 'HBF-228T'
+                # HEM-6232T retains the measured-data-friendly 60-second delay
+                # and one timed retry. HBF-228T never uses a blind timer: only a
+                # fresh advertisement can trigger its next attempt.
                 if not hbf and watch_ticket['attempt'] == 1 and not self.stop_event.is_set() and not self.store.error:
                     current = self.store.device(device['id'])
                     if self.listen_signature(current) == watch_ticket['signature']:
@@ -262,8 +268,10 @@ class CollectorManager:
                     message = '機器が通信可能でないためスキップしました'
                 if retry:
                     message += '。60秒後に1回だけ再試行を予約しました'
+                elif hbf_advert_retry:
+                    message += '。HBF-228Tは次の新しいBluetooth広告を検知した時点で即時再接続します'
                 elif hbf:
-                    message += '。HBF-228Tは測定後の通信時間が短いため再試行せず、次の測定時の検知を待ちます'
+                    message += '。接続後の通信エラーのため最短間隔を空け、次の検知を待ちます'
                 else:
                     message += '。今回の待ち受け同期を終了し、次の検知を待ちます'
             self.store.update_job(identifier, "skipped" if skipped else "failed", message,
