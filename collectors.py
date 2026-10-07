@@ -104,6 +104,7 @@ class CollectorManager:
         self.listen_seen = {}
         self.listen_delayed = {}
         self.listen_jobs = {}
+        self.listen_bursts = {}
         self.scan_group = 0
         self.watch_error = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
@@ -194,6 +195,10 @@ class CollectorManager:
                     request['advert_at'] = advert_at
                     listen_info['advert_at'] = advert_at
                     listen_info['request_after_advert_ms'] = int(time.time() * 1000 - advert_at)
+                if isinstance(watch_ticket.get('advert_fingerprint'), str):
+                    listen_info['advert_fingerprint'] = watch_ticket['advert_fingerprint'][:64]
+                if isinstance(watch_ticket.get('advert_rssi'), (int, float)) and not isinstance(watch_ticket.get('advert_rssi'), bool):
+                    listen_info['advert_rssi'] = watch_ticket['advert_rssi']
             if action == "pair":
                 # Preserve an attempted key separately until programming succeeds.
                 key_path = self.store.directory.parent / "config" / ("pair-" + device["id"] + ".json")
@@ -230,6 +235,10 @@ class CollectorManager:
                 message = f"{len(result.get('devices', []))}台検出しました"
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
+                burst = self.listen_bursts.setdefault(device['id'], {})
+                burst['synced'] = True
+                burst['blocked'] = False
+                burst['synced_at'] = watch_ticket.get('advert_at')
             # Listener mode is event-driven and may legitimately receive many new
             # measurements per day. Only periodic polling keeps the daily success gate.
             self.store.update_job(identifier, "done", message, result,
@@ -275,9 +284,14 @@ class CollectorManager:
                 elif hbf_advert_retry:
                     message += '。HBF-228Tは次の新しいBluetooth広告を検知した時点で即時再接続します'
                 elif hbf:
-                    message += '。接続後の通信エラーのため最短間隔を空け、次の検知を待ちます'
+                    burst = self.listen_bursts.setdefault(device['id'], {})
+                    burst['blocked'] = True
+                    message += '。接続後の通信エラーのため同じ広告バーストでは再同期せず、次のバーストを待ちます'
                 else:
-                    message += '。今回の待ち受け同期を終了し、次の検知を待ちます'
+                    if watch_ticket['attempt'] >= 2:
+                        burst = self.listen_bursts.setdefault(device['id'], {})
+                        burst['blocked'] = True
+                    message += '。今回の待ち受け同期を終了し、次の広告バーストを待ちます'
             self.store.update_job(identifier, "skipped" if skipped else "failed", message,
                                   {'diagnostic': trace} if trace else None)
         finally:
@@ -335,23 +349,42 @@ class CollectorManager:
             self.listen_adapter = adapter
             self.listen_ready = bool(result.get('ready'))
             self.listen_error = result.get('error')
-            events = {e['address']: e['at'] for e in result.get('events', [])}
-            self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in {d['id'] for d in devices}}
+            events = {e['address']: e for e in result.get('events', []) if isinstance(e, dict) and 'address' in e and 'at' in e}
+            active_ids = {d['id'] for d in devices}
+            self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in active_ids}
+            self.listen_bursts = {k: v for k, v in self.listen_bursts.items() if k in active_ids}
             for device in devices:
                 event = events.get(device['address'])
-                if event is None or event <= self.listen_seen.get(device['id'], 0):
+                if event is None:
                     continue
-                # Consume newer advertisements during waiting/cooldown; never extend a reservation.
-                self.listen_seen[device['id']] = event
+                event_at = event['at']
+                if event_at <= self.listen_seen.get(device['id'], 0):
+                    continue
+                self.listen_seen[device['id']] = event_at
                 with self.lock:
+                    burst = self.listen_bursts.setdefault(device['id'], {})
+                    last_event = burst.get('last_event_at')
+                    synced_at = burst.get('synced_at')
+                    quiet_gap = last_event is not None and event_at - last_event >= 90000
+                    safety_probe = synced_at is not None and event_at - synced_at >= 600000
+                    new_burst = last_event is None or quiet_gap or safety_probe
+                    burst['last_event_at'] = event_at
+                    if new_burst:
+                        burst['synced'] = False
+                        burst['blocked'] = False
+                        burst['started_at'] = event_at
+                    if (burst.get('synced') or burst.get('blocked')) and not new_burst:
+                        continue
                     if device['id'] in self.listen_delayed or device['id'] in self.pending:
                         continue
-                    # HBF-228T advertises only briefly after its measurement, so start
-                    # at once. HEM-6232T keeps the 60-second delay and one retry.
+                    # HBF-228T connects immediately. HEM-6232T keeps the
+                    # measured-data-friendly 60-second debounce and one retry.
                     delay = 0 if device['model'] == 'HBF-228T' else 60
                     self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
                                                         'signature': self.listen_signature(device),
-                                                        'advert_at': event}
+                                                        'advert_at': event_at,
+                                                        'advert_fingerprint': event.get('fingerprint'),
+                                                        'advert_rssi': event.get('rssi')}
         except Exception as error:
             self.listen_ready = False
             self.listen_error = '待ち受けに接続できません。HomeHub 0.3.5以降を確認してください: ' + str(error)

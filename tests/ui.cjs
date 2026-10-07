@@ -70,11 +70,19 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert(d.getElementById('ai-test'));
  assert.equal(d.getElementById('device-form').elements.sync_mode.value,'listen');
  const listenerFetch=w.fetch;
- w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}],completed_today:[]}),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
+ const diagnosticJob={id:'diag-open',device_id:registered.id,action:'sync',state:'done',
+  created_at:new Date().toISOString(),message:'待ち受け同期: 0件追加・30件重複・0件日時不正',
+  result:JSON.stringify({diagnostic:{stage:'completed',listen:{advert_fingerprint:'abc123',advert_rssi:-60}}})};
+ w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}],completed_today:[]}),{headers:{'Content-Type':'application/json'}})):url==='/api/jobs'&&(!init||!init.method)?Promise.resolve(new Response(JSON.stringify([diagnosticJob]),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
  await w.__testRefreshJobs();
  assert.match(d.getElementById('listen-status').textContent,/再試行まで約42秒/);
  assert.doesNotMatch(d.getElementById('listen-status').textContent,/本日の.*同期済み/);
  assert.match(d.getElementById('device-list').textContent,/待ち受け・通知ごと/);
+ const diagnosticDetails=d.querySelector('#jobs details');
+ diagnosticDetails.open=true;
+ await w.__testRefreshJobs();
+ assert.equal(d.querySelector('#jobs details').open,true);
+ assert.match(d.querySelector('#jobs pre').textContent,/advert_fingerprint/);
  w.fetch=listenerFetch;
 
  d.querySelector('[data-page="wellness"]').click();

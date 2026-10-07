@@ -45,7 +45,7 @@ class DailySyncTests(unittest.TestCase):
             self.assertEqual(restarted.runner.call_count, 4)
             self.assertEqual(set(restarted.listener_status()['completed_today']), {d['id'], other['id']})
 
-    def test_listener_survives_restart_and_accepts_every_fresh_event(self):
+    def test_listener_survives_restart_and_dedupes_same_advertisement_burst(self):
         d = self.devices[0]
         # Simulate a completion marker left by an older release. Listener mode
         # must ignore it after restart and remain eligible without a browser.
@@ -67,10 +67,17 @@ class DailySyncTests(unittest.TestCase):
             self.assertFalse(reopened.device(d['id'])['automatic_synced_today'])
             self.assertEqual(manager.listener_status()['completed_today'], [])
 
-            # A second measurement/advertisement on the same day is accepted
-            # immediately; listener mode has neither a daily gate nor interval cooldown.
+            # Repeated advertisements in the same measurement burst do not
+            # re-read all history.
             response['events'][0]['at'] = advert + 5000
             clock.return_value = 105
+            manager.schedule()
+            self.assertTrue(manager.queue.empty())
+            self.assertEqual(runner.call_count, 1)
+
+            # A 90-second quiet gap opens a new burst on the same day.
+            response['events'][0]['at'] = advert + 95000
+            clock.return_value = 195
             manager.schedule()
             manager.process(manager.queue.get_nowait())
             self.assertEqual(runner.call_count, 2)
