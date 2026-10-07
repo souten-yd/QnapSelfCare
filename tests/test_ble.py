@@ -332,7 +332,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(request['advert_at'], advert)
                 job = store.jobs()[0]
                 self.assertEqual(job['state'], 'skipped')
-                self.assertIn('再試行せず', job['message'])
+                self.assertIn('次の新しいBluetooth広告', job['message'])
                 self.assertNotIn('60秒後', job['message'])
                 listen = json.loads(job['result'])['diagnostic']['listen']
                 self.assertEqual(listen, {'attempt': 1, 'advert_at': advert, 'request_after_advert_ms': 1500})
@@ -349,14 +349,12 @@ class ProtocolTests(unittest.TestCase):
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'failed')
                 self.assertFalse(manager.listen_delayed)
-                # Other failures keep the normal cooldown.
+                # A connection-stage miss also keeps the HBF retry window open
+                # for the next fresh advertisement instead of imposing cooldown.
                 response['events'][0]['at'] = advert + 10000
                 clock.return_value = 111
                 manager.schedule()
-                self.assertEqual(manager.queue.qsize(), 0)
-                response['events'][0]['at'] = advert + 20000
-                clock.return_value = 410  # 108 + 300-second interval
-                manager.schedule()
+                self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'done')
                 self.assertEqual(json.loads(store.jobs()[0]['result'])['diagnostic']['listen']['attempt'], 1)
@@ -409,7 +407,10 @@ class ProtocolTests(unittest.TestCase):
         request = {'action': 'sync', 'adapter': 'hci0', 'advert_at': 1_790_000_000_000,
                    'device': {'address': 'AA:BB:CC:DD:EE:FF', 'model': 'HBF-228T'}}
         agent = AsyncMock(return_value=None)
-        cached = AsyncMock(return_value=('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF', {'Paired': True, 'Bonded': True}))
+        cached = AsyncMock(return_value=('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF', {
+            'Address': 'AA:BB:CC:DD:EE:FF', 'AddressType': 'public', 'Name': 'BLEsmart_0001000B',
+            'Paired': True, 'Bonded': True, 'Trusted': True, 'Blocked': False,
+            'Connected': False, 'ServicesResolved': False, 'Connectable': True, 'RSSI': -44}))
         fake, bleak, client = modules()
         trace = {'stage': 'starting', 'slots': []}
         with patch.dict(sys.modules, fake), patch.object(ble_worker, 'register_agent', agent), \
@@ -423,7 +424,11 @@ class ProtocolTests(unittest.TestCase):
         client.disconnect.assert_awaited()
         self.assertEqual(trace['discovery_method'], 'bluez_cache')
         self.assertEqual(trace['elapsed_since_advert_ms'], 2000)
-        self.assertEqual(trace['bluez_cached'], {'paired': True, 'bonded': True, 'connected': False})
+        self.assertEqual(trace['bluez_cached']['address_type'], 'public')
+        self.assertTrue(trace['bluez_cached']['connectable'])
+        self.assertEqual(trace['bluez_cached']['rssi'], -44)
+        self.assertEqual(trace['connection_timeout_s'], 8)
+        self.assertTrue(trace['connected_transition'])
         self.assertIn('connect_ms', trace)
 
         # No connectable advertisement during the connect wait is reported as "not found".
@@ -434,6 +439,8 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '^機器が見つかりません'):
                 asyncio.run(ble_worker.operate(request, trace))
         self.assertEqual(trace['stage'], 'connection')
+        self.assertEqual(trace['connection_timeout_s'], 8)
+        self.assertEqual(trace['connect_error']['type'], 'TimeoutError')
 
         # Without a BlueZ object the worker falls back to discovery.
         fake, bleak, client = modules()
