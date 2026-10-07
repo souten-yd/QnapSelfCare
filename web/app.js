@@ -92,7 +92,82 @@ function renderScan(scan){
   controls.append(model,user,slot,use);row.append(controls);target.append(row);
  }
 }
-async function refreshJobs(){const openJobIds=new Set([...document.querySelectorAll('#jobs details[open]')].map(node=>node.dataset.jobId).filter(Boolean));if(activePage==='devices'){try{const status=await api('/api/listener');$('listen-status').textContent=status.error|| (status.configured?(status.busy?'待ち受け：通信処理中（完了後に再開）':status.ready?'待ち受け：機器からの通信を検知しています':'待ち受け：準備中'):'待ち受け：有効な対象機器なし');if(status.waiting?.length)$('listen-status').textContent+=' ／ '+status.waiting.map(w=>`${devices.find(d=>d.id===w.device_id)?.name||'機器'}：${w.attempt===2?'再試行':'同期'}まで約${w.seconds}秒`).join('・');if(status.completed_today?.length)$('listen-status').textContent+=' ／ 本日の周期検索済み：'+status.completed_today.map(id=>devices.find(d=>d.id===id)?.name||'機器').join('・')+'（0時にリセット／手動は制限なし）';}catch{$('listen-status').textContent='待ち受け状態を取得できません';}}const jobs=await api('/api/jobs');$('jobs').replaceChildren();if(!jobs.length)$('jobs').append(element('p','まだ同期・操作履歴はありません'));jobs.forEach(j=>{const row=element('div',undefined,'job '+j.state);row.append(element('strong',({queued:'待機中',running:'実行中',done:'完了',failed:'失敗',skipped:'スキップ'})[j.state]),element('span',`${({scan:'スキャン',pair:'ペアリング',sync:'同期'})[j.action]} — ${devices.find(d=>d.id===j.device_id)?.name||'Bluetooth'}`),element('small',`${dateText(j.created_at)}　${j.message}`));if(j.result){try{const detail=JSON.parse(j.result).diagnostic;if(detail){if(j.state==='failed'&&detail.stage==='discovery')row.append(element('p','未検出：機器との接続・データ読取りはまだ始まっていません。HBF-228Tは本体のBluetoothボタンを短く触れてから同期してください。NASとの距離やスマホとの同時接続も確認してください。','notice'));const box=element('details');box.dataset.jobId=j.id;if(openJobIds.has(j.id))box.open=true;box.append(element('summary','詳細診断・機器応答: '+(detail.stage||'不明')));if(detail.responses?.length)box.append(element('p',`機器応答 ${detail.responses.length}件（直近8件まで）。raw_hexには測定データが含まれる場合があります。共有する前に内容を確認してください。`));box.append(element('pre',JSON.stringify(detail,null,2)));row.append(box);}}catch{}}$('jobs').append(row);});const scan=jobs.find(j=>j.action==='scan');const scanKey=(scan?.id||'')+':'+(scan?.state||'')+':'+devices.map(d=>d.address).join(',');if(scanKey!==previousScanRender){renderScan(scan);previousScanRender=scanKey;}const state=jobs.map(j=>j.id+':'+j.state).join();if(previousJobState&&state!==previousJobState&&jobs.some(j=>j.state==='done')){await refreshMeta();await refreshRecords();}previousJobState=state;}
+function jobDetail(j){
+ let detail=null;
+ if(j.result){try{detail=JSON.parse(j.result).diagnostic||null;}catch{}}
+ return detail;
+}
+function patchJobRow(row,j){
+ row.className='job '+j.state;
+ row.dataset.jobId=j.id;
+ let status=row.querySelector(':scope > strong');
+ let title=row.querySelector(':scope > span');
+ let meta=row.querySelector(':scope > small');
+ if(!status){status=element('strong');row.append(status);}
+ if(!title){title=element('span');row.append(title);}
+ if(!meta){meta=element('small');row.append(meta);}
+ status.textContent=({queued:'待機中',running:'実行中',done:'完了',failed:'失敗',skipped:'スキップ'})[j.state];
+ title.textContent=`${({scan:'スキャン',pair:'ペアリング',sync:'同期'})[j.action]} — ${devices.find(d=>d.id===j.device_id)?.name||'Bluetooth'}`;
+ meta.textContent=`${dateText(j.created_at)}　${j.message}`;
+ const detail=jobDetail(j);
+ let notice=row.querySelector(':scope > .notice');
+ let box=row.querySelector(':scope > details');
+ if(detail){
+  const needNotice=j.state==='failed'&&detail.stage==='discovery';
+  if(needNotice&&!notice){notice=element('p','未検出：機器との接続・データ読取りはまだ始まっていません。HBF-228Tは本体のBluetoothボタンを短く触れてから同期してください。NASとの距離やスマホとの同時接続も確認してください。','notice');row.append(notice);}
+  if(!needNotice&&notice)notice.remove();
+  if(!box){box=element('details');box.dataset.jobId=j.id;box.append(element('summary'),element('pre'));row.append(box);}
+  box.dataset.jobId=j.id;
+  box.querySelector('summary').textContent='詳細診断・機器応答: '+(detail.stage||'不明');
+  let info=box.querySelector(':scope > p');
+  if(detail.responses?.length){
+   if(!info){info=element('p');box.insertBefore(info,box.querySelector('pre'));}
+   info.textContent=`機器応答 ${detail.responses.length}件（直近8件まで）。raw_hexには測定データが含まれる場合があります。共有する前に内容を確認してください。`;
+  }else if(info)info.remove();
+  box.querySelector('pre').textContent=JSON.stringify(detail,null,2);
+ }else{
+  if(notice)notice.remove();
+  if(box)box.remove();
+ }
+}
+function renderJobsIncrementally(jobs){
+ const target=$('jobs');
+ const existing=new Map([...target.querySelectorAll(':scope > .job[data-job-id]')].map(row=>[row.dataset.jobId,row]));
+ const wanted=new Set(jobs.map(j=>j.id));
+ for(const [id,row] of existing)if(!wanted.has(id))row.remove();
+ const empty=target.querySelector(':scope > .jobs-empty');
+ if(!jobs.length){
+  if(!empty)target.append(element('p','まだ同期・操作履歴はありません','jobs-empty'));
+  return;
+ }
+ if(empty)empty.remove();
+ jobs.forEach((j,index)=>{
+  let row=existing.get(j.id);
+  if(!row){row=element('div',undefined,'job '+j.state);row.dataset.jobId=j.id;}
+  const key=JSON.stringify([j.state,j.action,j.device_id,j.created_at,j.message,j.result,devices.find(d=>d.id===j.device_id)?.name||'Bluetooth']);
+  if(row.dataset.renderKey!==key){patchJobRow(row,j);row.dataset.renderKey=key;}
+  const current=target.children[index];
+  if(current!==row)target.insertBefore(row,current||null);
+ });
+}
+async function refreshJobs(){
+ if(activePage==='devices'){
+  try{
+   const status=await api('/api/listener');
+   $('listen-status').textContent=status.error|| (status.configured?(status.busy?'待ち受け：通信処理中（完了後に再開）':status.ready?'待ち受け：機器からの通信を検知しています':'待ち受け：準備中'):'待ち受け：有効な対象機器なし');
+   if(status.waiting?.length)$('listen-status').textContent+=' ／ '+status.waiting.map(w=>`${devices.find(d=>d.id===w.device_id)?.name||'機器'}：${w.attempt===2?'再試行':'同期'}まで約${w.seconds}秒`).join('・');
+   if(status.completed_today?.length)$('listen-status').textContent+=' ／ 本日の周期検索済み：'+status.completed_today.map(id=>devices.find(d=>d.id===id)?.name||'機器').join('・')+'（0時にリセット／手動は制限なし）';
+  }catch{$('listen-status').textContent='待ち受け状態を取得できません';}
+ }
+ const jobs=await api('/api/jobs');
+ renderJobsIncrementally(jobs);
+ const scan=jobs.find(j=>j.action==='scan');
+ const scanKey=(scan?.id||'')+':'+(scan?.state||'')+':'+devices.map(d=>d.address).join(',');
+ if(scanKey!==previousScanRender){renderScan(scan);previousScanRender=scanKey;}
+ const state=jobs.map(j=>j.id+':'+j.state).join();
+ if(previousJobState&&state!==previousJobState&&jobs.some(j=>j.state==='done')){await refreshMeta();await refreshRecords();}
+ previousJobState=state;
+}
 async function refreshDiagnostics(){
  const [d,s]=await Promise.all([api('/api/diagnostics'),api('/api/status')]);
  const rows={'バージョン':s.version,'CPU':s.architecture||'不明','USB Bluetooth':s.bluetooth_adapters.join(', ')||'未検出',

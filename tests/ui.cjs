@@ -13,6 +13,8 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(async()=>{try{return (await fetch(base+'/api/status')).ok;}catch{return false;}});
  dom=new JSDOM(fs.readFileSync('web/index.html','utf8'),{url:base,runScripts:'outside-only'});
  const w=dom.window,d=w.document;
+ const appSource=fs.readFileSync('web/app.js','utf8');
+ assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
  w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
@@ -73,16 +75,32 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  const diagnosticJob={id:'diag-open',device_id:registered.id,action:'sync',state:'done',
   created_at:new Date().toISOString(),message:'待ち受け同期: 0件追加・30件重複・0件日時不正',
   result:JSON.stringify({diagnostic:{stage:'completed',listen:{advert_fingerprint:'abc123',advert_rssi:-60}}})};
- w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}],completed_today:[]}),{headers:{'Content-Type':'application/json'}})):url==='/api/jobs'&&(!init||!init.method)?Promise.resolve(new Response(JSON.stringify([diagnosticJob]),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
+ let diagnosticJobs=[diagnosticJob];
+ w.fetch=(url,init)=>url==='/api/listener'?Promise.resolve(new Response(JSON.stringify({configured:true,ready:true,waiting:[{device_id:registered.id,attempt:2,seconds:42}],completed_today:[]}),{headers:{'Content-Type':'application/json'}})):url==='/api/jobs'&&(!init||!init.method)?Promise.resolve(new Response(JSON.stringify(diagnosticJobs),{headers:{'Content-Type':'application/json'}})):listenerFetch(url,init);
  await w.__testRefreshJobs();
  assert.match(d.getElementById('listen-status').textContent,/再試行まで約42秒/);
  assert.doesNotMatch(d.getElementById('listen-status').textContent,/本日の.*同期済み/);
  assert.match(d.getElementById('device-list').textContent,/待ち受け・通知ごと/);
- const diagnosticDetails=d.querySelector('#jobs details');
+ const diagnosticRow=d.querySelector('#jobs .job[data-job-id="diag-open"]');
+ const diagnosticDetails=diagnosticRow.querySelector('details');
  diagnosticDetails.open=true;
  await w.__testRefreshJobs();
- assert.equal(d.querySelector('#jobs details').open,true);
- assert.match(d.querySelector('#jobs pre').textContent,/advert_fingerprint/);
+ assert.equal(d.querySelector('#jobs .job[data-job-id="diag-open"]'),diagnosticRow);
+ assert.equal(d.querySelector('#jobs details'),diagnosticDetails);
+ assert.equal(diagnosticDetails.open,true);
+ assert.match(diagnosticDetails.querySelector('pre').textContent,/advert_fingerprint/);
+ const newerJob={id:'diag-new',device_id:registered.id,action:'sync',state:'running',
+  created_at:new Date(Date.now()+1000).toISOString(),message:'同期中',result:null};
+ diagnosticJobs=[newerJob,diagnosticJob];
+ await w.__testRefreshJobs();
+ assert.equal(d.querySelector('#jobs .job').dataset.jobId,'diag-new');
+ assert.equal(d.querySelector('#jobs .job[data-job-id="diag-open"]'),diagnosticRow);
+ assert.equal(diagnosticDetails.open,true);
+ diagnosticJob.message='待ち受け同期: 完了';
+ await w.__testRefreshJobs();
+ assert.equal(d.querySelector('#jobs .job[data-job-id="diag-open"]'),diagnosticRow);
+ assert.equal(diagnosticDetails.open,true);
+ assert.match(diagnosticRow.textContent,/完了/);
  w.fetch=listenerFetch;
 
  d.querySelector('[data-page="wellness"]').click();
