@@ -194,6 +194,10 @@ class CollectorManager:
                     request['advert_at'] = advert_at
                     listen_info['advert_at'] = advert_at
                     listen_info['request_after_advert_ms'] = int(time.time() * 1000 - advert_at)
+                if isinstance(watch_ticket.get('advert_fingerprint'), str):
+                    listen_info['advert_fingerprint'] = watch_ticket['advert_fingerprint'][:64]
+                if isinstance(watch_ticket.get('advert_rssi'), (int, float)) and not isinstance(watch_ticket.get('advert_rssi'), bool):
+                    listen_info['advert_rssi'] = watch_ticket['advert_rssi']
             if action == "pair":
                 # Preserve an attempted key separately until programming succeeds.
                 key_path = self.store.directory.parent / "config" / ("pair-" + device["id"] + ".json")
