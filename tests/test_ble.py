@@ -217,11 +217,11 @@ class ProtocolTests(unittest.TestCase):
                 # Listener mode has no 300-second cooldown: the next fresh device
                 # advertisement starts a new HEM delayed-sync cycle immediately.
                 response['events'] = [{'address': device['address'], 'at': 1236}]
-                clock.return_value = 281
+                clock.return_value = 282
                 manager.schedule()
                 self.assertTrue(manager.listen_delayed)
                 self.assertEqual(manager.listener_status()['waiting'][0]['attempt'], 1)
-                clock.return_value = 341
+                clock.return_value = 342
                 runner.side_effect = None
                 runner.return_value = {'records': []}
                 manager.schedule()
