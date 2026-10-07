@@ -13,6 +13,8 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(async()=>{try{return (await fetch(base+'/api/status')).ok;}catch{return false;}});
  dom=new JSDOM(fs.readFileSync('web/index.html','utf8'),{url:base,runScripts:'outside-only'});
  const w=dom.window,d=w.document;
+ const appSource=fs.readFileSync('web/app.js','utf8');
+ assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
  w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
