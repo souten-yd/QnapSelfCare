@@ -141,19 +141,14 @@ function renderJobsIncrementally(jobs){
   return;
  }
  if(empty)empty.remove();
- for(let i=jobs.length-1;i>=0;i--){
-  const j=jobs[i];
+ jobs.forEach((j,index)=>{
   let row=existing.get(j.id);
   if(!row){row=element('div',undefined,'job '+j.state);row.dataset.jobId=j.id;}
-  patchJobRow(row,j);
-  const anchor=target.firstElementChild;
-  if(i===0){
-   if(anchor!==row)target.insertBefore(row,anchor);
-  }else{
-   const previous=target.querySelector(`:scope > .job[data-job-id="${jobs[i-1].id}"]`);
-   if(previous&&previous.nextElementSibling!==row)target.insertBefore(row,previous.nextElementSibling);
-  }
- }
+  const key=JSON.stringify([j.state,j.action,j.device_id,j.created_at,j.message,j.result,devices.find(d=>d.id===j.device_id)?.name||'Bluetooth']);
+  if(row.dataset.renderKey!==key){patchJobRow(row,j);row.dataset.renderKey=key;}
+  const current=target.children[index];
+  if(current!==row)target.insertBefore(row,current||null);
+ });
 }
 async function refreshJobs(){
  if(activePage==='devices'){
