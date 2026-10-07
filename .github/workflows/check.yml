@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.25 >/dev/null 2>&1; then
-            echo 'Release v0.3.25 already exists; leaving it unchanged.'
+          if gh release view v0.3.26 >/dev/null 2>&1; then
+            echo 'Release v0.3.26 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.25 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.25' \
-            --notes 'Improve HBF-228T listener synchronization with bounded fast connection attempts, fresh-advertisement retries, richer BlueZ diagnostics, while preserving HEM-6232T delayed retry behavior.' \
+          gh release create v0.3.26 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.26' \
+            --notes 'Fix self-update version drift so the QPKG registration and running Web app report the same version; add CI coverage to prevent future release-version mismatches.' \
             --target "$GITHUB_SHA"
