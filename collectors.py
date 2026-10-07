@@ -230,6 +230,10 @@ class CollectorManager:
                 message = f"{len(result.get('devices', []))}台検出しました"
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
+                burst = self.listen_bursts.setdefault(device['id'], {})
+                burst['synced'] = True
+                burst['blocked'] = False
+                burst['synced_at'] = watch_ticket.get('advert_at')
             # Listener mode is event-driven and may legitimately receive many new
             # measurements per day. Only periodic polling keeps the daily success gate.
             self.store.update_job(identifier, "done", message, result,
