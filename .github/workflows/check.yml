@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.30 >/dev/null 2>&1; then
-            echo 'Release v0.3.30 already exists; leaving it unchanged.'
+          if gh release view v0.3.31 >/dev/null 2>&1; then
+            echo 'Release v0.3.31 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.30 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.30' \
-            --notes 'Deduplicate listener auto-sync by advertisement burst, keep HBF immediate and HEM delayed retry behavior, record advertisement fingerprints for diagnosis, and preserve expanded job diagnostics during UI polling.' \
+          gh release create v0.3.31 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.31' \
+            --notes 'Update Bluetooth job history incrementally so polling preserves DOM identity, open diagnostics, and scroll position; prepend only genuinely new jobs.' \
             --target "$GITHUB_SHA"
