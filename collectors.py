@@ -104,6 +104,7 @@ class CollectorManager:
         self.listen_seen = {}
         self.listen_delayed = {}
         self.listen_jobs = {}
+        self.listen_bursts = {}
         self.scan_group = 0
         self.watch_error = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
