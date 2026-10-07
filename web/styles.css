@@ -165,3 +165,17 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 }
 
 .ai-guide-button{display:inline-flex;align-items:center;gap:7px}.ai-guide-button svg{width:18px;height:18px;flex:none}
+
+
+/* Compact latest body-composition summary. */
+.body-summary-card>.body-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;margin-top:10px}
+.body-summary-card>.body-summary>div{min-width:0;padding:7px 0}
+.body-summary-card>.body-summary small{font-size:11px;color:var(--muted)}
+.body-summary-card>.body-summary strong{font-size:24px;line-height:1.2;margin:3px 0 0;letter-spacing:-.5px;white-space:nowrap}
+.body-summary-card>.body-summary strong small{display:inline;font-size:10px;margin-left:2px}
+@media(max-width:700px){
+ .body-summary-card>.body-summary{gap:5px 8px;margin-top:7px}
+ .body-summary-card>.body-summary>div{padding:4px 0}
+ .body-summary-card>.body-summary strong{font-size:clamp(16px,4.5vw,22px)}
+ .body-summary-card>.body-summary small{font-size:10px}
+}
