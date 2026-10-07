@@ -279,9 +279,14 @@ class CollectorManager:
                 elif hbf_advert_retry:
                     message += '。HBF-228Tは次の新しいBluetooth広告を検知した時点で即時再接続します'
                 elif hbf:
-                    message += '。接続後の通信エラーのため最短間隔を空け、次の検知を待ちます'
+                    burst = self.listen_bursts.setdefault(device['id'], {})
+                    burst['blocked'] = True
+                    message += '。接続後の通信エラーのため同じ広告バーストでは再同期せず、次のバーストを待ちます'
                 else:
-                    message += '。今回の待ち受け同期を終了し、次の検知を待ちます'
+                    if watch_ticket['attempt'] >= 2:
+                        burst = self.listen_bursts.setdefault(device['id'], {})
+                        burst['blocked'] = True
+                    message += '。今回の待ち受け同期を終了し、次の広告バーストを待ちます'
             self.store.update_job(identifier, "skipped" if skipped else "failed", message,
                                   {'diagnostic': trace} if trace else None)
         finally:
