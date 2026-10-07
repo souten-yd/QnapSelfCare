@@ -22,8 +22,10 @@ class DailySyncTests(unittest.TestCase):
         manager.submit('sync', d['id'], automatic=automatic)
         manager.process(manager.queue.get_nowait())
 
-    def test_per_device_success_persists_restart_and_manual_is_unlimited(self):
+    def test_interval_success_persists_restart_and_manual_is_unlimited(self):
         d, other = self.devices
+        d = self.store.save_device(dict(d, sync_mode='interval'))
+        other = self.store.save_device(dict(other, sync_mode='interval'))
         with patch('storage.now', return_value='2026-09-25T14:59:00+00:00'):
             manager = CollectorManager(self.store, runner=Mock(return_value={'records': []}))
             self.sync(manager, d, False)
@@ -35,7 +37,7 @@ class DailySyncTests(unittest.TestCase):
             self.assertFalse(self.store.device(other['id'])['automatic_synced_today'])
             reopened = Store(self.tmp.name)
             restarted = CollectorManager(reopened, runner=Mock(return_value={'records': []}))
-            with self.assertRaisesRegex(ValueError, '本日の自動同期'):
+            with self.assertRaisesRegex(ValueError, '本日の周期検索'):
                 restarted.submit('sync', d['id'], automatic=True)
             for _ in range(3):
                 self.sync(restarted, d, False)
@@ -43,26 +45,50 @@ class DailySyncTests(unittest.TestCase):
             self.assertEqual(restarted.runner.call_count, 4)
             self.assertEqual(set(restarted.listener_status()['completed_today']), {d['id'], other['id']})
 
-    def test_midnight_reenables_listener_and_clears_cross_day_cooldown(self):
+    def test_listener_survives_restart_and_accepts_every_fresh_event(self):
         d = self.devices[0]
-        response = {'supported': True, 'ready': True, 'events': [{'address': d['address'], 'at': 1}]}
-        with patch('storage.now', return_value='2026-09-25T14:59:59+00:00') as wall, patch('collectors.time.monotonic', return_value=100) as clock, patch('collectors.bridge_request', return_value=response) as bridge:
+        # Simulate a completion marker left by an older release. Listener mode
+        # must ignore it after restart and remain eligible without a browser.
+        legacy = self.store.create_job(d['id'], 'sync')
+        self.store.update_job(legacy, 'done', automatic=True)
+        reopened = Store(self.tmp.name)
+        self.assertFalse(reopened.device(d['id'])['automatic_synced_today'])
+        runner = Mock(return_value={'records': []})
+        manager = CollectorManager(reopened, runner=runner)
+        advert = 1_790_000_000_000
+        response = {'supported': True, 'ready': True,
+                    'events': [{'address': d['address'], 'at': advert}]}
+        with patch('collectors.bridge_request', return_value=response), \
+                patch('collectors.time.monotonic', return_value=100) as clock, \
+                patch('collectors.time.time', return_value=advert / 1000 + 1):
+            manager.schedule()
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(runner.call_count, 1)
+            self.assertFalse(reopened.device(d['id'])['automatic_synced_today'])
+            self.assertEqual(manager.listener_status()['completed_today'], [])
+
+            # A second measurement/advertisement on the same day is accepted
+            # immediately; listener mode has neither a daily gate nor interval cooldown.
+            response['events'][0]['at'] = advert + 5000
+            clock.return_value = 105
+            manager.schedule()
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(runner.call_count, 2)
+            self.assertEqual([j['state'] for j in reopened.jobs()[:2]], ['done', 'done'])
+
+    def test_interval_midnight_releases_daily_gate(self):
+        d = self.store.save_device(dict(self.devices[0], sync_mode='interval'))
+        with patch('storage.now', return_value='2026-09-25T14:59:59+00:00') as wall:
             manager = CollectorManager(self.store, runner=Mock(return_value={'records': []}))
             self.sync(manager, d, True)
-            manager.schedule()
-            self.assertNotIn(d['address'], bridge.call_args.args[1]['addresses'])
-            self.assertNotIn(d['id'], manager.listen_delayed)
-            # Exactly 00:00 JST; not midnight of the NAS host's timezone or a rolling 24-hour window.
-            wall.return_value = '2026-09-25T15:00:00+00:00'
-            clock.return_value = 101
-            response['events'][0]['at'] = 2
-            manager.schedule()
-            self.assertIn(d['address'], bridge.call_args.args[1]['addresses'])
-            self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
-            # HBF-228T starts in the same tick as the detection.
-            manager.process(manager.queue.get_nowait())
-            self.assertEqual(manager.runner.call_count, 2)
             self.assertTrue(self.store.device(d['id'])['automatic_synced_today'])
+            manager.next_attempt[d['id']] = 999999
+            wall.return_value = '2026-09-25T15:00:00+00:00'
+            with patch('collectors.time.monotonic', return_value=100):
+                manager.schedule()
+            self.assertFalse(self.store.device(d['id'])['automatic_synced_today'])
+            self.assertEqual(manager.runner.call_count, 2)
+            self.assertLess(manager.next_attempt[d['id']], 999999)
 
     def test_interval_scan_stops_after_success_and_failures_do_not_consume_day(self):
         d = self.devices[0]
@@ -82,7 +108,7 @@ class DailySyncTests(unittest.TestCase):
             self.assertTrue(manager.queue.empty())
 
     def test_daily_marker_survives_backup_and_queued_job_rechecks_gate(self):
-        d = self.devices[0]
+        d = self.store.save_device(dict(self.devices[0], sync_mode='interval'))
         with patch('storage.now', return_value='2026-09-25T10:00:00+00:00'):
             runner = Mock(return_value={'records': []})
             manager = CollectorManager(self.store, runner=runner)

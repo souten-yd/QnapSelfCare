@@ -129,8 +129,8 @@ class CollectorManager:
         if action != "scan":
             if device is None:
                 raise ValueError("機器が登録されていません")
-            if automatic and action == 'sync' and device.get('automatic_synced_today'):
-                raise ValueError('本日の自動同期は完了しています。手動同期はいつでも実行できます')
+            if automatic and action == 'sync' and device.get('sync_mode', 'interval') != 'listen' and device.get('automatic_synced_today'):
+                raise ValueError('本日の周期検索による自動同期は完了しています。手動同期はいつでも実行できます')
             if not device["address"]:
                 raise ValueError("Bluetoothアドレスを登録してください")
             if action == "sync" and not device["bindings"]:
@@ -172,8 +172,9 @@ class CollectorManager:
         try:
             if automatic and action == 'sync':
                 current = self.store.device(device['id'])
-                if not current or not current['auto_sync'] or current.get('automatic_synced_today'):
-                    self.store.update_job(identifier, 'skipped', '本日の自動同期が完了済み、または自動同期が解除されたため取り消しました')
+                daily_gated = current and current.get('sync_mode', 'interval') != 'listen' and current.get('automatic_synced_today')
+                if not current or not current['auto_sync'] or daily_gated:
+                    self.store.update_job(identifier, 'skipped', '本日の周期検索による自動同期が完了済み、または自動同期が解除されたため取り消しました')
                     return
             if watch_ticket is not None:
                 current = self.store.device(device['id'])
@@ -229,7 +230,10 @@ class CollectorManager:
                 message = f"{len(result.get('devices', []))}台検出しました"
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
-            self.store.update_job(identifier, "done", message, result, automatic=automatic and action == "sync")
+            # Listener mode is event-driven and may legitimately receive many new
+            # measurements per day. Only periodic polling keeps the daily success gate.
+            self.store.update_job(identifier, "done", message, result,
+                                  automatic=automatic and action == "sync" and device.get('sync_mode', 'interval') != 'listen')
         except Exception as error:
             trace = getattr(error, 'diagnostic', None) or trace
             if watch_ticket is not None and diagnostic:
@@ -280,11 +284,16 @@ class CollectorManager:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
-                self.next_attempt[device["id"]] = time.monotonic() + (device["interval"] if cooldown is None else cooldown)
+                # Listener mode is driven by distinct device advertisements, not
+                # by a polling interval. Never suppress a later notification.
+                if watch_ticket is not None:
+                    self.next_attempt.pop(device["id"], None)
+                else:
+                    self.next_attempt[device["id"]] = time.monotonic() + (device["interval"] if cooldown is None else cooldown)
 
     @staticmethod
     def listen_signature(device):
-        if not device or device.get('automatic_synced_today') or not (device['auto_sync'] and device['paired'] and device['bindings']
+        if not device or not (device['auto_sync'] and device['paired'] and device['bindings']
                 and device.get('sync_mode') == 'listen' and device['transport'] == 'homehub'):
             return None
         return json.dumps({k: device[k] for k in ('address', 'adapter', 'model', 'bindings', 'transport')}, sort_keys=True)
@@ -309,7 +318,6 @@ class CollectorManager:
             return
         self.next_watch = time.monotonic() + 2
         devices = [d for d in self.store.devices() if d['auto_sync'] and d['paired'] and d['bindings']
-                   and not d.get('automatic_synced_today')
                    and d.get('sync_mode', 'interval') == 'listen' and d['transport'] == 'homehub']
         if not devices and not self.watch_configured:
             self.listen_ready = False
@@ -336,8 +344,7 @@ class CollectorManager:
                 # Consume newer advertisements during waiting/cooldown; never extend a reservation.
                 self.listen_seen[device['id']] = event
                 with self.lock:
-                    if (device['id'] in self.listen_delayed or device['id'] in self.pending
-                            or time.monotonic() < self.next_attempt.get(device['id'], 0)):
+                    if device['id'] in self.listen_delayed or device['id'] in self.pending:
                         continue
                     # HBF-228T advertises only briefly after its measurement, so start
                     # at once. HEM-6232T keeps the 60-second delay and one retry.
@@ -434,7 +441,9 @@ class CollectorManager:
             busy = bool(self.pending)
         return {'ready': self.listen_ready, 'error': self.listen_error,
                 'configured': self.watch_configured, 'busy': busy, 'waiting': waiting,
-                'completed_today': [d['id'] for d in self.store.devices() if d['auto_sync'] and d.get('automatic_synced_today')]}
+                'completed_today': [d['id'] for d in self.store.devices()
+                                    if d['auto_sync'] and d.get('sync_mode', 'interval') != 'listen'
+                                    and d.get('automatic_synced_today')]}
 
     def diagnostics(self):
         root = self.store.directory.parent

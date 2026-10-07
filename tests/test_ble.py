@@ -213,19 +213,15 @@ class ProtocolTests(unittest.TestCase):
                 clock.return_value = 280
                 manager.schedule()
                 self.assertTrue(manager.queue.empty())
-                self.assertEqual(runner.call_count, 2)  # Never a third retry.
+                self.assertEqual(runner.call_count, 2)  # Never a third blind retry.
+                # Listener mode has no 300-second cooldown: the next fresh device
+                # advertisement starts a new HEM delayed-sync cycle immediately.
                 response['events'] = [{'address': device['address'], 'at': 1236}]
-                clock.return_value = 519
-                manager.schedule()
-                self.assertFalse(manager.listen_delayed)
-                clock.return_value = 521
-                manager.schedule()
-                self.assertFalse(manager.listen_delayed)  # Cached event consumed during cooldown.
-                response['events'][0]['at'] = 1237
-                clock.return_value = 523
+                clock.return_value = 282
                 manager.schedule()
                 self.assertTrue(manager.listen_delayed)
-                clock.return_value = 583
+                self.assertEqual(manager.listener_status()['waiting'][0]['attempt'], 1)
+                clock.return_value = 342
                 runner.side_effect = None
                 runner.return_value = {'records': []}
                 manager.schedule()
