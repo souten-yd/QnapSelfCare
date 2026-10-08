@@ -120,6 +120,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, config TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS automatic_sync_days(
                     device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS listener_sync_successes(
+                    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS pairing(address TEXT PRIMARY KEY, key TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS measurements(
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE,
@@ -619,6 +621,7 @@ class Store:
                     "users": [dict(r) for r in db.execute("SELECT * FROM users")],
                     "devices": [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")],
                     "automatic_sync_days": [dict(r) for r in db.execute('SELECT * FROM automatic_sync_days')],
+                    "listener_sync_successes": [dict(r) for r in db.execute('SELECT * FROM listener_sync_successes')],
                     "wellness_profiles": [dict(json.loads(r['config']), user_id=r['user_id'])
                                           for r in db.execute('SELECT * FROM wellness_profiles')],
                     "activity_routines": [dict(user_id=r['user_id'], effective_date=r['effective_date'], created_at=r['created_at'], entry=json.loads(r['config'])) for r in db.execute('SELECT * FROM activity_routines ORDER BY id')],
@@ -661,6 +664,14 @@ class Store:
                 if not isinstance(item, dict) or set(item) != {'device_id', 'completed_at'} or item['device_id'] not in device_map:
                     raise ValueError('自動同期履歴の機器が不正です')
                 db.execute('INSERT INTO automatic_sync_days VALUES(?,?)',
+                           (item['device_id'], timestamp(item['completed_at'])))
+            listener_successes = backup.get('listener_sync_successes', [])
+            if not isinstance(listener_successes, list) or len(listener_successes) > len(devices):
+                raise ValueError('待ち受け同期履歴が不正です')
+            for item in listener_successes:
+                if not isinstance(item, dict) or set(item) != {'device_id', 'completed_at'} or item['device_id'] not in device_map:
+                    raise ValueError('待ち受け同期履歴の機器が不正です')
+                db.execute('INSERT INTO listener_sync_successes VALUES(?,?)',
                            (item['device_id'], timestamp(item['completed_at'])))
             for record in records:
                 normalized = self.validate_record(record, user_ids, device_map, record.get("source", "backup"))
@@ -726,6 +737,21 @@ class Store:
                 db.execute("INSERT INTO pairing VALUES(?,?) ON CONFLICT(address) DO UPDATE SET key=excluded.key", (address, key))
             row = db.execute("SELECT key FROM pairing WHERE address=?", (address,)).fetchone()
             return row[0] if row else None
+
+    def last_listener_sync(self, device_id):
+        with self.connect() as db:
+            row = db.execute('SELECT completed_at FROM listener_sync_successes WHERE device_id=?', (device_id,)).fetchone()
+            return row['completed_at'] if row else None
+
+    def mark_listener_sync(self, device_id, completed_at=None):
+        completed_at = timestamp(completed_at or now())
+        with self.connect() as db:
+            if not db.execute('SELECT 1 FROM devices WHERE id=?', (device_id,)).fetchone():
+                raise ValueError('機器が見つかりません')
+            db.execute('INSERT INTO listener_sync_successes VALUES(?,?) '
+                       'ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
+                       (device_id, completed_at))
+        return completed_at
 
     def jobs(self):
         with self.connect() as db:

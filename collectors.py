@@ -2,6 +2,7 @@
 import http.client
 import importlib.util
 import json
+from datetime import datetime
 import os
 from pathlib import Path
 import queue
@@ -235,6 +236,8 @@ class CollectorManager:
             else:
                 result = dict(result, adapter=adapter, transport=transport)
                 message = f"{len(result.get('devices', []))}台検出しました"
+            if action == 'sync' and device.get('model') == 'HBF-228T':
+                self.store.mark_listener_sync(device['id'])
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
                 burst = self.listen_bursts.setdefault(device['id'], {})
@@ -371,6 +374,16 @@ class CollectorManager:
                 if event_at <= self.listen_seen.get(device['id'], 0):
                     continue
                 self.listen_seen[device['id']] = event_at
+                if device['model'] == 'HBF-228T':
+                    last_success = self.store.last_listener_sync(device['id'])
+                    if last_success:
+                        last_success_ms = int(datetime.fromisoformat(last_success).timestamp() * 1000)
+                        if event_at < last_success_ms + 3600000:
+                            # HBF-228T can advertise for a long period after one
+                            # measurement. A successful sync therefore suppresses
+                            # automatic listener connections for one hour, even
+                            # across SelfCare/NAS restarts. Manual sync bypasses this.
+                            continue
                 with self.lock:
                     burst = self.listen_bursts.setdefault(device['id'], {})
                     last_event = burst.get('last_event_at')

@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.32 >/dev/null 2>&1; then
-            echo 'Release v0.3.32 already exists; leaving it unchanged.'
+          if gh release view v0.3.33 >/dev/null 2>&1; then
+            echo 'Release v0.3.33 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.32 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.32' \
-            --notes 'Bound HBF-228T connection retries to three attempts per advertisement/probe window and prevent the 10-minute safety probe from reopening on every continued advertisement.' \
+          gh release create v0.3.33 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.33' \
+            --notes 'After a successful HBF-228T sync, suppress automatic listener syncs for one hour, persist the cooldown across restarts, and keep manual sync and failed-connect retry behavior available.' \
             --target "$GITHUB_SHA"
