@@ -398,7 +398,7 @@ class ProtocolTests(unittest.TestCase):
                 # failures are bounded independently instead of every advert
                 # being treated as a new burst.
                 response['events'][0]['at'] = advert + 600000
-                clock.return_value = 700
+                clock.return_value = 702
                 manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
