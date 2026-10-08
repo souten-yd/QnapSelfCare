@@ -387,7 +387,7 @@ class ProtocolTests(unittest.TestCase):
 
                 # Continued advertising in the same probe window does not create
                 # an unbounded connection loop after the third miss.
-                for seconds in (30, 45, 60, 300, 599):
+                for seconds in (30, 45, 60, 120, 180, 240, 300, 360, 420, 480, 540, 599):
                     response['events'][0]['at'] = advert + seconds * 1000
                     clock.return_value = 100 + seconds
                     manager.schedule()
