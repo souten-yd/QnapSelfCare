@@ -307,8 +307,9 @@ class CollectorManager:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
-                # Listener mode is driven by distinct device advertisements, not
-                # by a polling interval. Never suppress a later notification.
+                # Listener mode uses advertisement bursts rather than the normal
+                # polling interval. Burst/probe state decides whether a later
+                # notification is eligible for another bounded attempt.
                 if watch_ticket is not None:
                     self.next_attempt.pop(device["id"], None)
                 else:
