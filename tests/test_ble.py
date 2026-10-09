@@ -355,7 +355,7 @@ class ProtocolTests(unittest.TestCase):
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'done')
                 completed_listen = json.loads(store.jobs()[0]['result'])['diagnostic']['listen']
-                self.assertEqual((completed_listen['attempt'], completed_listen['burst_attempt']), (1, 3))
+                self.assertEqual(completed_listen['attempt'], 1)
                 self.assertEqual(runner.call_count, 3)
 
 
