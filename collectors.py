@@ -190,8 +190,6 @@ class CollectorManager:
             listen_info = None
             if watch_ticket is not None:
                 listen_info = {'attempt': watch_ticket['attempt']}
-                if isinstance(watch_ticket.get('burst_attempt'), int):
-                    listen_info['burst_attempt'] = watch_ticket['burst_attempt']
                 advert_at = watch_ticket.get('advert_at')
                 if isinstance(advert_at, (int, float)) and not isinstance(advert_at, bool) and advert_at > 0:
                     # HomeHub reports the advertisement in wall-clock milliseconds.
@@ -244,7 +242,6 @@ class CollectorManager:
                 burst['synced'] = True
                 burst['blocked'] = False
                 burst['synced_at'] = watch_ticket.get('advert_at')
-                burst['probe_at'] = watch_ticket.get('advert_at', burst.get('probe_at'))
             # Listener mode is event-driven and may legitimately receive many new
             # measurements per day. Only periodic polling keeps the daily success gate.
             self.store.update_job(identifier, "done", message, result,
@@ -288,13 +285,7 @@ class CollectorManager:
                 if retry:
                     message += '。60秒後に1回だけ再試行を予約しました'
                 elif hbf_advert_retry:
-                    burst = self.listen_bursts.setdefault(device['id'], {})
-                    attempts = int(watch_ticket.get('burst_attempt', burst.get('attempts', 1)))
-                    if attempts >= 3:
-                        burst['blocked'] = True
-                        message += '。同じ広告バーストで3回接続できなかったため再試行を停止し、90秒以上の無広告または10分後の安全確認を待ちます'
-                    else:
-                        message += f'。HBF-228Tは次の新しいBluetooth広告で再接続します（{attempts}/3）'
+                    message += '。HBF-228Tは次の新しいBluetooth広告を検知した時点で即時再接続します'
                 elif hbf:
                     burst = self.listen_bursts.setdefault(device['id'], {})
                     burst['blocked'] = True
@@ -310,9 +301,8 @@ class CollectorManager:
             with self.lock:
                 self.pending.discard(pending_key)
             if device:
-                # Listener mode uses advertisement bursts rather than the normal
-                # polling interval. Burst/probe state decides whether a later
-                # notification is eligible for another bounded attempt.
+                # Listener mode is driven by distinct device advertisements, not
+                # by a polling interval. Never suppress a later notification.
                 if watch_ticket is not None:
                     self.next_attempt.pop(device["id"], None)
                 else:
@@ -376,38 +366,29 @@ class CollectorManager:
                 self.listen_seen[device['id']] = event_at
                 if device['model'] == 'HBF-228T':
                     last_success = self.store.last_listener_sync(device['id'])
-                    if last_success:
-                        last_success_ms = int(datetime.fromisoformat(last_success).timestamp() * 1000)
-                        if event_at < last_success_ms + 3600000:
-                            # HBF-228T can advertise for a long period after one
-                            # measurement. A successful sync therefore suppresses
-                            # automatic listener connections for one hour, even
-                            # across SelfCare/NAS restarts. Manual sync bypasses this.
-                            continue
-                with self.lock:
-                    burst = self.listen_bursts.setdefault(device['id'], {})
-                    last_event = burst.get('last_event_at')
-                    probe_at = burst.get('probe_at')
-                    quiet_gap = last_event is not None and event_at - last_event >= 90000
-                    safety_probe = probe_at is not None and event_at - probe_at >= 600000
-                    new_burst = last_event is None or quiet_gap or safety_probe
-                    burst['last_event_at'] = event_at
-                    if new_burst:
-                        burst['synced'] = False
-                        burst['blocked'] = False
-                        burst['started_at'] = event_at
-                        burst['probe_at'] = event_at
-                        burst['attempts'] = 0
-                    if (burst.get('synced') or burst.get('blocked')) and not new_burst:
+                    if last_success and event_at < int(datetime.fromisoformat(last_success).timestamp() * 1000) + 3600000:
                         continue
+                with self.lock:
+                    if device['model'] != 'HBF-228T':
+                        burst = self.listen_bursts.setdefault(device['id'], {})
+                        last_event = burst.get('last_event_at')
+                        synced_at = burst.get('synced_at')
+                        quiet_gap = last_event is not None and event_at - last_event >= 90000
+                        safety_probe = synced_at is not None and event_at - synced_at >= 600000
+                        new_burst = last_event is None or quiet_gap or safety_probe
+                        burst['last_event_at'] = event_at
+                        if new_burst:
+                            burst['synced'] = False
+                            burst['blocked'] = False
+                            burst['started_at'] = event_at
+                        if (burst.get('synced') or burst.get('blocked')) and not new_burst:
+                            continue
                     if device['id'] in self.listen_delayed or device['id'] in self.pending:
                         continue
                     # HBF-228T connects immediately. HEM-6232T keeps the
                     # measured-data-friendly 60-second debounce and one retry.
                     delay = 0 if device['model'] == 'HBF-228T' else 60
-                    burst['attempts'] = int(burst.get('attempts', 0)) + 1
                     self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
-                                                        'burst_attempt': burst['attempts'],
                                                         'signature': self.listen_signature(device),
                                                         'advert_at': event_at,
                                                         'advert_fingerprint': event.get('fingerprint'),
