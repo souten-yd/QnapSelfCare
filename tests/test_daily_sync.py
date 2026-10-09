@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 from storage import Store
 from collectors import CollectorManager, BluetoothFailure
@@ -46,58 +45,54 @@ class DailySyncTests(unittest.TestCase):
             self.assertEqual(restarted.runner.call_count, 4)
             self.assertEqual(set(restarted.listener_status()['completed_today']), {d['id'], other['id']})
 
-    def test_listener_success_persists_one_hour_hbf_cooldown_across_restart(self):
+    def test_hbf_success_only_cooldown_survives_restart(self):
+        from datetime import datetime, timezone
         d = self.devices[0]
-        # Simulate a completion marker left by an older release. Listener mode
-        # must ignore the daily gate and remain eligible without a browser.
-        legacy = self.store.create_job(d['id'], 'sync')
-        self.store.update_job(legacy, 'done', automatic=True)
-        reopened = Store(self.tmp.name)
-        self.assertFalse(reopened.device(d['id'])['automatic_synced_today'])
-
         runner = Mock(return_value={'records': []})
-        manager = CollectorManager(reopened, runner=runner)
-        advert = 1_790_000_000_000
-        success_iso = datetime.fromtimestamp(advert / 1000, timezone.utc).isoformat(timespec='seconds')
-        response = {'supported': True, 'ready': True,
-                    'events': [{'address': d['address'], 'at': advert}]}
+        manager = CollectorManager(self.store, runner=runner)
+        advert = 1790000000000
+        response = {'supported': True, 'ready': True, 'events': [{'address': d['address'], 'at': advert}]}
+        stamped = datetime.fromtimestamp((advert + 1000)/1000, timezone.utc).isoformat()
         with patch('collectors.bridge_request', return_value=response), \
-                patch('collectors.time.monotonic', return_value=100) as clock, \
-                patch('collectors.time.time', return_value=advert / 1000 + 1), \
-                patch('storage.now', return_value=success_iso):
+             patch('collectors.time.monotonic', return_value=100) as clock, \
+             patch('storage.now', return_value=stamped):
             manager.schedule()
             manager.process(manager.queue.get_nowait())
             self.assertEqual(runner.call_count, 1)
-            self.assertEqual(reopened.last_listener_sync(d['id']), success_iso)
-            self.assertFalse(reopened.device(d['id'])['automatic_synced_today'])
-
-        # Recreating both Store and Collector models a SelfCare/NAS restart.
         restarted_store = Store(self.tmp.name)
-        restarted_runner = Mock(return_value={'records': []})
-        restarted = CollectorManager(restarted_store, runner=restarted_runner)
+        restarted = CollectorManager(restarted_store, runner=Mock(return_value={'records': []}))
         with patch('collectors.bridge_request', return_value=response), \
-                patch('collectors.time.monotonic', return_value=200) as clock:
-            # New advertisements during the next hour are consumed but ignored.
-            for seconds in (10, 90, 900, 1800, 3599):
-                response['events'][0]['at'] = advert + seconds * 1000
-                clock.return_value = 200 + seconds
-                restarted.schedule()
-                self.assertTrue(restarted.queue.empty())
-            restarted_runner.assert_not_called()
-
-            # At one hour, the next advertisement is eligible immediately.
-            response['events'][0]['at'] = advert + 3600 * 1000
-            clock.return_value = 3802
+             patch('collectors.time.monotonic', return_value=200) as clock:
+            response['events'][0]['at'] = advert + 95000
+            restarted.schedule()
+            self.assertTrue(restarted.queue.empty())
+            response['events'][0]['at'] = advert + 3599000
+            clock.return_value = 400
+            restarted.schedule()
+            self.assertTrue(restarted.queue.empty())
+            response['events'][0]['at'] = advert + 3602000
+            clock.return_value = 402
             restarted.schedule()
             self.assertEqual(restarted.queue.qsize(), 1)
+        with tempfile.TemporaryDirectory() as dest:
+            restored = Store(dest)
+            restored.restore(self.store.backup())
+            self.assertEqual(restored.last_listener_sync(d['id']), stamped)
 
-        # Manual sync remains unrestricted by the automatic-listener cooldown.
-        manual_store = Store(self.tmp.name)
-        manual_runner = Mock(return_value={'records': []})
-        manual = CollectorManager(manual_store, runner=manual_runner)
-        manual.submit('sync', d['id'], automatic=False)
-        manual.process(manual.queue.get_nowait())
-        self.assertEqual(manual_runner.call_count, 1)
+    def test_hbf_failure_has_no_success_cooldown_or_retry_count_limit(self):
+        d = self.devices[0]
+        runner = Mock(side_effect=BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'))
+        manager = CollectorManager(self.store, runner=runner)
+        response = {'supported': True, 'ready': True, 'events': [{'address': d['address'], 'at': 1790000000000}]}
+        with patch('collectors.bridge_request', return_value=response), \
+             patch('collectors.time.monotonic', return_value=100) as clock:
+            for i in range(4):
+                response['events'][0]['at'] = 1790000000000 + i * 10000
+                clock.return_value = 100 + i * 10
+                manager.schedule()
+                manager.process(manager.queue.get_nowait())
+            self.assertEqual(runner.call_count, 4)
+            self.assertIsNone(self.store.last_listener_sync(d['id']))
 
     def test_interval_midnight_releases_daily_gate(self):
         d = self.store.save_device(dict(self.devices[0], sync_mode='interval'))

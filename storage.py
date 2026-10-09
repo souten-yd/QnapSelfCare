@@ -120,8 +120,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, config TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS automatic_sync_days(
                     device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS listener_sync_successes(
-                    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS listener_sync_successes(device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, completed_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS pairing(address TEXT PRIMARY KEY, key TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS measurements(
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE,
@@ -667,12 +666,11 @@ class Store:
                            (item['device_id'], timestamp(item['completed_at'])))
             listener_successes = backup.get('listener_sync_successes', [])
             if not isinstance(listener_successes, list) or len(listener_successes) > len(devices):
-                raise ValueError('待ち受け同期履歴が不正です')
+                raise ValueError('待ち受け同期成功履歴が不正です')
             for item in listener_successes:
                 if not isinstance(item, dict) or set(item) != {'device_id', 'completed_at'} or item['device_id'] not in device_map:
-                    raise ValueError('待ち受け同期履歴の機器が不正です')
-                db.execute('INSERT INTO listener_sync_successes VALUES(?,?)',
-                           (item['device_id'], timestamp(item['completed_at'])))
+                    raise ValueError('待ち受け同期成功履歴の機器が不正です')
+                db.execute('INSERT INTO listener_sync_successes VALUES (?,?)', (item['device_id'], timestamp(item['completed_at'])))
             for record in records:
                 normalized = self.validate_record(record, user_ids, device_map, record.get("source", "backup"))
                 normalized["id"] = identifier(record.get("id"), "記録ID")
@@ -743,13 +741,10 @@ class Store:
             row = db.execute('SELECT completed_at FROM listener_sync_successes WHERE device_id=?', (device_id,)).fetchone()
             return row['completed_at'] if row else None
 
-    def mark_listener_sync(self, device_id, completed_at=None):
-        completed_at = timestamp(completed_at or now())
+    def mark_listener_sync(self, device_id):
+        completed_at = now()
         with self.connect() as db:
-            if not db.execute('SELECT 1 FROM devices WHERE id=?', (device_id,)).fetchone():
-                raise ValueError('機器が見つかりません')
-            db.execute('INSERT INTO listener_sync_successes VALUES(?,?) '
-                       'ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
+            db.execute('INSERT INTO listener_sync_successes VALUES (?,?) ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
                        (device_id, completed_at))
         return completed_at
 

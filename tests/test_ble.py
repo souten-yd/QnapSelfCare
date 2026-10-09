@@ -331,7 +331,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn('次の新しいBluetooth広告', job['message'])
                 self.assertNotIn('60秒後', job['message'])
                 listen = json.loads(job['result'])['diagnostic']['listen']
-                self.assertEqual(listen, {'attempt': 1, 'burst_attempt': 1, 'advert_at': advert, 'request_after_advert_ms': 1500})
+                self.assertEqual(listen, {'attempt': 1, 'advert_at': advert, 'request_after_advert_ms': 1500})
                 self.assertFalse(manager.listen_delayed)
                 # A missed scale does not wait out the 300-second minimum interval:
                 # the next advertisement (next measurement) starts at once.
@@ -355,61 +355,9 @@ class ProtocolTests(unittest.TestCase):
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'done')
                 completed_listen = json.loads(store.jobs()[0]['result'])['diagnostic']['listen']
-                self.assertEqual((completed_listen['attempt'], completed_listen['burst_attempt']), (1, 3))
+                self.assertEqual(completed_listen['attempt'], 1)
                 self.assertEqual(runner.call_count, 3)
 
-    def test_hbf_listener_bounds_failed_retries_and_reopens_only_next_probe_window(self):
-        with tempfile.TemporaryDirectory() as root:
-            store = Store(root)
-            user = store.save_user({'name': 'test'})
-            device = store.save_device({'model': 'HBF-228T', 'address': 'AA:BB:CC:DD:EE:FF',
-                'bindings': {'1': user['id']}, 'auto_sync': True, 'interval': 300})
-            store.pairing_key(device['address'], '11' * 16)
-            missing = '機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'
-            runner = Mock(side_effect=BluetoothFailure(missing, {'stage': 'connection'}))
-            manager = CollectorManager(store, runner=runner)
-            advert = 1_790_000_000_000
-            response = {'supported': True, 'ready': True, 'events': [{'address': device['address'], 'at': advert}]}
-            with patch('collectors.bridge_request', return_value=response), \
-                    patch('collectors.time.monotonic', return_value=100) as clock, \
-                    patch('collectors.time.time', return_value=advert / 1000 + 1):
-                for index, seconds in enumerate((0, 10, 20), start=1):
-                    response['events'][0]['at'] = advert + seconds * 1000
-                    clock.return_value = 100 + seconds
-                    manager.schedule()
-                    self.assertEqual(manager.queue.qsize(), 1)
-                    manager.process(manager.queue.get_nowait())
-                    job = store.jobs()[0]
-                    listen = json.loads(job['result'])['diagnostic']['listen']
-                    self.assertEqual(listen['burst_attempt'], index)
-                self.assertEqual(runner.call_count, 3)
-                self.assertIn('3回接続できなかった', store.jobs()[0]['message'])
-
-                # Continued advertising in the same probe window does not create
-                # an unbounded connection loop after the third miss.
-                for seconds in (30, 45, 60, 120, 180, 240, 300, 360, 420, 480, 540, 599):
-                    response['events'][0]['at'] = advert + seconds * 1000
-                    clock.return_value = 100 + seconds
-                    manager.schedule()
-                    self.assertTrue(manager.queue.empty())
-                self.assertEqual(runner.call_count, 3)
-
-                # At ten minutes a single new safety probe window opens. Its
-                # failures are bounded independently instead of every advert
-                # being treated as a new burst.
-                response['events'][0]['at'] = advert + 600000
-                clock.return_value = 702
-                manager.schedule()
-                self.assertEqual(manager.queue.qsize(), 1)
-                manager.process(manager.queue.get_nowait())
-                self.assertEqual(runner.call_count, 4)
-                listen = json.loads(store.jobs()[0]['result'])['diagnostic']['listen']
-                self.assertEqual(listen['burst_attempt'], 1)
-
-                response['events'][0]['at'] = advert + 605000
-                clock.return_value = 705
-                manager.schedule()
-                self.assertEqual(manager.queue.qsize(), 1)
 
     def test_worker_connects_to_cached_bluez_device_without_scanning(self):
         import sys
