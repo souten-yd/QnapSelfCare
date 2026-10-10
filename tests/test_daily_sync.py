@@ -22,6 +22,18 @@ class DailySyncTests(unittest.TestCase):
         manager.submit('sync', d['id'], automatic=automatic)
         manager.process(manager.queue.get_nowait())
 
+    def test_polling_reads_are_cached_but_job_writes_are_immediate(self):
+        from unittest.mock import patch
+        d = self.devices[0]
+        first = self.store.devices()
+        with patch.object(self.store, 'connect', side_effect=AssertionError('unnecessary database read')):
+            self.assertEqual(self.store.devices(), first)
+        job = self.store.create_job(d['id'], 'sync')
+        self.assertEqual(self.store.jobs()[0]['state'], 'queued')
+        self.store.update_job(job, 'done', 'completed')
+        self.assertEqual(self.store.jobs()[0]['state'], 'done')
+        self.assertEqual(self.store.device(d['id'])['id'], d['id'])
+
     def test_interval_success_persists_restart_and_manual_is_unlimited(self):
         d, other = self.devices
         d = self.store.save_device(dict(d, sync_mode='interval'))
