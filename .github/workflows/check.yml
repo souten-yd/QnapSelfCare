@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.35 >/dev/null 2>&1; then
-            echo 'Release v0.3.35 already exists; leaving it unchanged.'
+          if gh release view v0.3.36 >/dev/null 2>&1; then
+            echo 'Release v0.3.36 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.35 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.35' \
-            --notes 'Wait for QTS shared storage and Python QPKG availability at boot instead of failing startup immediately.' \
+          gh release create v0.3.36 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.36' \
+            --notes 'Reduce repeated SQLite reads from idle collector/UI polling via short-lived memory caches while persisting health records and job transitions immediately.' \
             --target "$GITHUB_SHA"
