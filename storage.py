@@ -209,6 +209,7 @@ class Store:
                 if identifier in json.loads(row[0])["bindings"].values():
                     raise ValueError("機器の利用者割当を先に解除してください")
             db.execute("DELETE FROM users WHERE id=?", (identifier,))
+        self._clear_read_cache()
 
     def wellness_profile(self, user_id):
         with self.connect() as db:
