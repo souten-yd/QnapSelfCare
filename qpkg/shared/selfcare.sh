@@ -38,7 +38,7 @@ case "${1:-}" in
         elapsed=0
         python=
         while :; do
-            if [ -d "$(dirname "$data_dir")" ] && [ -d /share/Container ]; then
+            if [ -d /share/Container ] && [ -d "$(dirname "$data_dir")" ]; then
                 mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
                 if python=$(/bin/sh "$root/python3-path" 2>> "$logfile"); then
                     break
