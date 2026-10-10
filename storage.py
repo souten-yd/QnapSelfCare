@@ -12,6 +12,8 @@ import re
 import sqlite3
 import uuid
 import threading
+import time
+import copy
 
 from durability import (CorruptDatabase, DataUnavailable, check_database, corruption, write_json)
 import omron_csv
@@ -78,6 +80,9 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / "measurements.sqlite3"
         self.lock = threading.RLock()
+        # Short-lived, defensive copies keep periodic UI/collector reads off SQLite.
+        # All durable measurements, completed jobs and configuration still commit immediately.
+        self._read_cache = {}
         self.error = None
         state_directory = Path(state_directory) if state_directory is not None else self.directory
         self.guard = state_directory / 'database.guard.json'
@@ -327,19 +332,36 @@ class Store:
                        (user_id, json.dumps(profile, ensure_ascii=False)))
         return value
 
+    def _cached_read(self, key, loader, seconds=10):
+        # Lock both the read and its invalidation. Cache results are never mutated
+        # by callers, and age out to observe external restore/update processes.
+        with self.lock:
+            entry = self._read_cache.get(key)
+            if entry and time.monotonic() < entry[0]:
+                return copy.deepcopy(entry[1])
+            value = loader()
+            self._read_cache[key] = (time.monotonic() + seconds, copy.deepcopy(value))
+            return value
+
+    def _clear_read_cache(self):
+        with self.lock:
+            self._read_cache.clear()
+
     def devices(self, include_archived=False):
-        with self.connect() as db:
-            result = [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")]
-            if not include_archived:
-                result = [d for d in result if not d.get("archived", False)]
-            completed = {r['device_id']: r['completed_at'] for r in db.execute('SELECT * FROM automatic_sync_days')}
-            today = sync_day()
-            for device in result:
-                device.setdefault("sync_mode", "listen" if device["transport"] == "homehub" else "interval")
-                device['automatic_synced_today'] = (device['sync_mode'] != 'listen' and device['id'] in completed
-                                                    and sync_day(completed[device['id']]) == today)
-                device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
-        return result
+        def load():
+            with self.connect() as db:
+                result = [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")]
+                if not include_archived:
+                    result = [d for d in result if not d.get("archived", False)]
+                completed = {r['device_id']: r['completed_at'] for r in db.execute('SELECT * FROM automatic_sync_days')}
+                today = sync_day()
+                for device in result:
+                    device.setdefault("sync_mode", "listen" if device["transport"] == "homehub" else "interval")
+                    device['automatic_synced_today'] = (device['sync_mode'] != 'listen' and device['id'] in completed
+                                                        and sync_day(completed[device['id']]) == today)
+                    device["paired"] = bool(db.execute("SELECT 1 FROM pairing WHERE address=?", (device["address"],)).fetchone())
+            return result
+        return self._cached_read(('devices', include_archived, sync_day()), load)
 
     def device(self, identifier):
         return next((d for d in self.devices() if d["id"] == identifier), None)
@@ -396,6 +418,7 @@ class Store:
                     raise ValueError("同じBluetoothアドレスが登録済みです")
             db.execute("INSERT INTO devices VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config",
                        (did, json.dumps(config)))
+        self._clear_read_cache()
         return self.device(did)
 
     def delete_device(self, identifier):
@@ -737,20 +760,25 @@ class Store:
             return row[0] if row else None
 
     def last_listener_sync(self, device_id):
-        with self.connect() as db:
-            row = db.execute('SELECT completed_at FROM listener_sync_successes WHERE device_id=?', (device_id,)).fetchone()
-            return row['completed_at'] if row else None
+        def load():
+            with self.connect() as db:
+                row = db.execute('SELECT completed_at FROM listener_sync_successes WHERE device_id=?', (device_id,)).fetchone()
+                return row['completed_at'] if row else None
+        return self._cached_read(('listener_success', device_id), load)
 
     def mark_listener_sync(self, device_id):
         completed_at = now()
         with self.connect() as db:
             db.execute('INSERT INTO listener_sync_successes VALUES (?,?) ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
                        (device_id, completed_at))
+        self._clear_read_cache()
         return completed_at
 
     def jobs(self):
-        with self.connect() as db:
-            return [dict(r) for r in db.execute("SELECT id,device_id,action,state,created_at,finished_at,message,result FROM jobs ORDER BY created_at DESC,rowid DESC LIMIT 30")]
+        def load():
+            with self.connect() as db:
+                return [dict(r) for r in db.execute("SELECT id,device_id,action,state,created_at,finished_at,message,result FROM jobs ORDER BY created_at DESC,rowid DESC LIMIT 30")]
+        return self._cached_read('jobs', load)
 
     def create_job(self, device_id, action):
         identifier = uuid.uuid4().hex
@@ -763,6 +791,7 @@ class Store:
             db.execute("INSERT INTO jobs(id,device_id,action,state,created_at) VALUES(?,?,?,'queued',?)",
                        (identifier, device_id, action, now()))
             db.execute("DELETE FROM jobs WHERE state NOT IN ('queued','running') AND id NOT IN (SELECT id FROM jobs ORDER BY created_at DESC,rowid DESC LIMIT 200)")
+        self._clear_read_cache()
         return identifier
 
     def update_job(self, identifier, state, message="", result=None, automatic=False):
@@ -775,3 +804,4 @@ class Store:
                 if job and job['device_id']:
                     db.execute('INSERT INTO automatic_sync_days VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
                                (job['device_id'], finished))
+        self._clear_read_cache()
