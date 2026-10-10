@@ -437,6 +437,7 @@ class Store:
             db.execute("DELETE FROM pairing WHERE address=?", (config["address"],))
             # The recovery key must not be reused if this registration is removed.
             (self.directory.parent / "config" / ("pair-" + identifier + ".json")).unlink(missing_ok=True)
+        self._clear_read_cache()
 
     def validate_record(self, record, users, devices, source):
         if not isinstance(record, dict):
@@ -751,6 +752,7 @@ class Store:
             if backup.get('ai_settings') is not None:
                 from wellness_ai import validate as validate_ai
                 db.execute('INSERT INTO ai_settings VALUES(1,?)', (json.dumps(validate_ai(backup['ai_settings'])),))
+        self._clear_read_cache()
         return {"restored": len(records), "users": len(users), "devices": len(devices)}
 
     def pairing_key(self, address, key=None):
@@ -758,7 +760,9 @@ class Store:
             if key is not None:
                 db.execute("INSERT INTO pairing VALUES(?,?) ON CONFLICT(address) DO UPDATE SET key=excluded.key", (address, key))
             row = db.execute("SELECT key FROM pairing WHERE address=?", (address,)).fetchone()
-            return row[0] if row else None
+        if key is not None:
+            self._clear_read_cache()
+        return row[0] if row else None
 
     def last_listener_sync(self, device_id):
         def load():
