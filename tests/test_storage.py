@@ -1,5 +1,6 @@
 import copy
 import json
+from pathlib import Path
 import tempfile
 import unittest
 from storage import Store
@@ -13,6 +14,15 @@ class StoreTests(unittest.TestCase):
         self.user = self.store.save_user({"name": "Test"})
         self.record = {"user_id": self.user["id"], "kind": "blood_pressure", "measured_at": "2026-09-25T07:30:12+09:00",
                        "values": {"systolic": 130, "diastolic": 80, "pulse": 72}, "note": "test"}
+
+    def test_database_marker_is_not_rewritten_on_restart(self):
+        marker = Path(self.tmp.name) / 'database.initialized.json'
+        self.assertTrue(marker.is_file())
+        first = marker.stat().st_mtime_ns
+        second = Store(self.tmp.name)
+        self.assertFalse(second.error)
+        self.assertEqual(marker.stat().st_mtime_ns, first)
+        self.assertEqual(second.users()[0]['id'], self.user['id'])
 
     def test_delete_paired_device_keeps_records_and_restore_state(self):
         device = self.store.save_device({"model": "HEM-6232T", "address": "AA:BB:CC:DD:EE:FF", "bindings": {"1": self.user["id"]}, "auto_sync": True})
