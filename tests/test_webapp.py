@@ -39,6 +39,14 @@ class WebAppTests(unittest.TestCase):
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
+    def test_qpkg_reboot_startup_waits_for_dependencies(self):
+        script = (Path(__file__).resolve().parents[1] / 'qpkg/shared/selfcare.sh').read_text()
+        self.assertIn('SELFCARE_STARTUP_WAIT_SECONDS', script)
+        self.assertIn('sleep 2', script)
+        self.assertIn('[ -d /share/Container ]', script)
+        self.assertIn('python=$(/bin/sh "$root/python3-path"', script)
+        self.assertIn('running && exit 0', script)
+
     def test_release_versions_are_aligned(self):
         root = Path(__file__).resolve().parents[1]
         qpkg = (root / 'qpkg' / 'qpkg.cfg').read_text()

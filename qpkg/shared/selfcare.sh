@@ -29,12 +29,33 @@ case "${1:-}" in
         fi
         running && exit 0
         umask 077
-        [ -d "$(dirname "$data_dir")" ] || { echo 'Container share is missing' >&2; exit 1; }
-        mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
-        python=$(/bin/sh "$root/python3-path" 2>> "$logfile") || {
-            echo "Python 3.8+ not found; check $logfile" >&2
-            exit 1
-        }
+        # QTS can start QPKGs before storage volumes, shared-folder aliases
+        # and the Python QPKG have finished initializing after a NAS reboot.
+        # Never create /share/Container on an unmounted backing volume.
+        startup_wait=${SELFCARE_STARTUP_WAIT_SECONDS:-90}
+        case "$startup_wait" in *[!0-9]*|'') startup_wait=90;; esac
+        [ "$startup_wait" -le 180 ] || startup_wait=180
+        elapsed=0
+        python=
+        while :; do
+            ready=yes
+            [ -d "$(dirname "$data_dir")" ] || ready=no
+            case "$data_dir" in
+                /share/Container|/share/Container/*) [ -d /share/Container ] || ready=no ;;
+            esac
+            if [ "$ready" = yes ]; then
+                mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
+                if python=$(/bin/sh "$root/python3-path" 2>> "$logfile"); then
+                    break
+                fi
+            fi
+            if [ "$elapsed" -ge "$startup_wait" ]; then
+                echo "QnapSelfCare startup timed out after ${elapsed}s waiting for Container share and Python; check QTS volume and Python3 QPKG" >&2
+                exit 1
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
         rm -f "$root/admin-token"
         "$python" "$root/webapp.py" --lan --port 17863 --data-dir "$data_dir" < /dev/null > "$logfile" 2>&1 &
         echo $! > "$pidfile"
