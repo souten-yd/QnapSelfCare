@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.36"
+VERSION = "0.3.37"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -42,6 +42,15 @@ def bluetooth_adapters(root=BLUETOOTH_SYSFS):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "QnapSelfCare"
+
+    def log_message(self, format, *args):
+        # BaseHTTPRequestHandler writes one stderr line per HTTP request.
+        # QPKG redirects stderr to an HDD file; frequent Web UI polling would
+        # therefore wake the RAID even though only read-only data was requested.
+        # Responses (including 4xx/5xx) still report status to the caller.
+        # Durable health records and actual synchronization results are handled
+        # exclusively by Store, never by this access log.
+        pass
 
     def setup(self):
         super().setup()

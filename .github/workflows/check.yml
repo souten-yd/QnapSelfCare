@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.36 >/dev/null 2>&1; then
+          if gh release view v0.3.37 >/dev/null 2>&1; then
             echo 'Release v0.3.36 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.36 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.36' \
-            --notes 'Reduce repeated SQLite reads from idle collector/UI polling via short-lived memory caches while persisting health records and job transitions immediately.' \
+          gh release create v0.3.37 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.37' \
+            --notes 'Suppress persistent HTTP access logging during frequent dashboard/status polling and avoid rewriting the initialization marker on restarts. Blood-pressure/body-composition records remain durable in SQLite and existing sync/backups are unchanged.' \
             --target "$GITHUB_SHA"

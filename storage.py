@@ -97,7 +97,10 @@ class Store:
             elif self.marker.exists() or any((state_directory / 'backups').glob('selfcare-*.zip')):
                 raise CorruptDatabase('以前の測定DBが見つかりません。空のDBは作成しません')
             self._initialize()
-            write_json(self.marker, {'schema': 1})
+            # Initial database marker is durable, but rewriting the same marker
+            # at every QPKG restart is unnecessary RAID1 journal traffic.
+            if not self.marker.exists():
+                write_json(self.marker, {'schema': 1})
         except (CorruptDatabase, DataUnavailable, sqlite3.DatabaseError, OSError) as error:
             self.error = str(error)
             if isinstance(error, CorruptDatabase) or corruption(error):

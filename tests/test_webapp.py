@@ -1,4 +1,5 @@
 from http.server import ThreadingHTTPServer
+import io
 import json
 import tempfile
 import threading
@@ -38,6 +39,35 @@ class WebAppTests(unittest.TestCase):
         headers = {'Content-Type': 'application/json'}
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
+
+    def test_idle_http_poll_does_not_write_access_log_to_stderr(self):
+        # QPKG redirects stderr to persistent selfcare.log, so GET polling
+        # must never append access lines. User records are handled by SQLite.
+        with patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            for _ in range(3):
+                with self.request('/api/status') as response:
+                    self.assertEqual(response.status, 200)
+                with self.request('/api/records') as response:
+                    self.assertEqual(response.status, 200)
+                with self.request('/api/jobs') as response:
+                    self.assertEqual(response.status, 200)
+            self.assertEqual(stderr.getvalue(), '')
+
+    def test_blood_pressure_and_body_composition_remain_durable(self):
+        with self.request('/api/users', {'name': 'Test'}) as response:
+            user = json.load(response)
+        for kind, values in (
+                ('blood_pressure', {'systolic': 131, 'diastolic': 82, 'pulse': 71}),
+                ('body_composition', {'weight': 72.4, 'body_fat': 18.5})):
+            with self.request('/api/records', {
+                    'user_id': user['id'], 'kind': kind,
+                    'measured_at': '2026-10-11T08:00:00+09:00',
+                    'values': values}) as response:
+                self.assertEqual(json.load(response)['inserted'], 1)
+        # A new Store reads the real SQLite file; nothing is RAM-only.
+        reopened = Store(Path(self.tmp.name) / 'data', state_directory=self.tmp.name)
+        self.assertEqual({record['kind'] for record in reopened.records()['records']},
+                         {'blood_pressure', 'body_composition'})
 
     def test_qpkg_reboot_startup_waits_for_dependencies(self):
         script = (Path(__file__).resolve().parents[1] / 'qpkg/shared/selfcare.sh').read_text()
