@@ -1,5 +1,17 @@
 # USB BluetoothとQnapHomeHubの共用
 
+## QNAP新規導入・NAS再起動後のホストBlueZ低I/O確認
+
+**必読:** [QnapHomeHubの実機検証済み「QNAPホストBluetooth二重起動／HDD低I/O」手順](https://github.com/souten-yd/QnapHomeHub/blob/main/docs/QNAP-HOST-BLUEZ-LOW-IO-RUNBOOK.md)。
+
+2026-10-11、QTS 5.xでホスト側`/usr/sbin/bluetoothd`とDocker側`/usr/libexec/bluetooth/bluetoothd`が二重起動した際、QNAPホスト側が毎秒`lastseen`を更新し、約84 Write IOPS/HDDを観測しました。ホスト側だけを一時停止すると約2.7 IOPSに減少、QNAPの永続`/etc/config/uLinux.conf`で`Bluetooth Enable=FALSE`を明示してNAS再起動した後も約2.53 IOPS/HDDを確認しました。**1台のNASでの結果であり、ほかのQTS版での安全性は要確認**です。
+
+- 新規導入時は、QNAP標準Bluetoothを別アプリやHIDが利用していないかを先に確認し、必要な場合は止めない。
+- Docker側の専用BlueZを使う共通radio構成でのみ、上記HomeHub手順に沿ってホスト側の自動起動抑制を検討する。**QNAP BlueZをアンインストールしない**。
+- `/etc/init.d/bluetooth.sh stop` は`pidof bluetoothd`を使いDocker側プロセスにも影響し得るため、実行しない。
+- SelfCareの血圧計（HEM）・体組成計（HBF）を**実機同期**し、測定日時と数値がSelfCareのSQLite履歴に保存されたことを確認する。単なるradioの`watchReady=true`は実機同期の証拠ではない。
+- ペアリング鍵、SelfCare DB、記録済み健康データは永続保存のまま。低IOモードでも測定値の保存書き込みは必要な処理として維持する。
+
 ## 方針
 
 Web画面・ポート・記録DBは分離し、Bluetoothの制御だけを共通の `qnaphomehub-radio` コンテナへ集約します。ESP32・Home Assistantは不要です。QNAPのUSBドングルを使用します。
