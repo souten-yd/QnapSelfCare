@@ -106,6 +106,7 @@ class CollectorManager:
         self.listen_delayed = {}
         self.listen_jobs = {}
         self.listen_bursts = {}
+        self.listen_failures = {}
         self.scan_group = 0
         self.watch_error = None
         self.thread = threading.Thread(target=self.loop, daemon=True, name="selfcare-collector")
@@ -236,6 +237,7 @@ class CollectorManager:
                 message = f"{len(result.get('devices', []))}台検出しました"
             if action == 'sync' and device.get('model') == 'HBF-228T':
                 self.store.mark_listener_sync(device['id'])
+                self.listen_failures.pop(device['id'], None)
             if watch_ticket is not None:
                 message = ('待ち受け同期（再試行）: ' if watch_ticket['attempt'] == 2 else '待ち受け同期: ') + message
                 burst = self.listen_bursts.setdefault(device['id'], {})
@@ -260,13 +262,16 @@ class CollectorManager:
             missing = str(error) == "機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください"
             hbf = watch_ticket is not None and device.get('model') == 'HBF-228T'
             failure_stage = str(trace.get('stage', 'unknown')) if isinstance(trace, dict) else 'unknown'
-            # For HBF-228T, discovery/connection failures mean we missed a
-            # connectable advertisement, not that the measurement session is
-            # invalid. Do not impose the normal interval; a fresh advertisement
-            # can immediately trigger another bounded connection attempt.
+            # A packet is not a new measurement. Bound attempts even when the
+            # scale advertises continuously or changes its fingerprint.
             hbf_advert_retry = hbf and (missing or failure_stage in ('discovery', 'connection'))
-            if hbf_advert_retry:
-                cooldown = 0
+            if hbf:
+                quick_retry = hbf_advert_retry and watch_ticket['attempt'] == 1
+                with self.lock:
+                    self.listen_failures[device['id']] = {
+                        'retry_at': time.monotonic() + (30 if quick_retry else 300),
+                        'attempt': 2 if quick_retry else 1,
+                    }
             skipped = automatic and action == "sync" and missing
             message = "機器が通信可能でないためスキップしました。次の同期周期に再確認します" if skipped else str(error) or type(error).__name__
             if watch_ticket is not None:
@@ -284,12 +289,15 @@ class CollectorManager:
                     message = '機器が通信可能でないためスキップしました'
                 if retry:
                     message += '。60秒後に1回だけ再試行を予約しました'
-                elif hbf_advert_retry:
-                    message += '。HBF-228Tは次の新しいBluetooth広告を検知した時点で即時再接続します'
                 elif hbf:
-                    burst = self.listen_bursts.setdefault(device['id'], {})
-                    burst['blocked'] = True
-                    message += '。接続後の通信エラーのため同じ広告バーストでは再同期せず、次のバーストを待ちます'
+                    if quick_retry:
+                        message += '。30秒以上待ち、次の新しいBluetooth広告で1回だけ再試行します'
+                    else:
+                        message += '。連続試行を止めて5分休止し、その後の新しいBluetooth広告を待ちます'
+                    rssi = trace.get('rssi') if isinstance(trace, dict) else None
+                    if (failure_stage == 'connection' and type(rssi) in (int, float)
+                            and -127 <= rssi <= -85):
+                        message += '。受信電波が弱いため、体組成計と受信機を近づけて確認してください（原因は未確定）'
                 else:
                     if watch_ticket['attempt'] >= 2:
                         burst = self.listen_bursts.setdefault(device['id'], {})
@@ -356,6 +364,7 @@ class CollectorManager:
             active_ids = {d['id'] for d in devices}
             self.listen_seen = {k: v for k, v in self.listen_seen.items() if k in active_ids}
             self.listen_bursts = {k: v for k, v in self.listen_bursts.items() if k in active_ids}
+            self.listen_failures = {k: v for k, v in self.listen_failures.items() if k in active_ids}
             for device in devices:
                 event = events.get(device['address'])
                 if event is None:
@@ -369,7 +378,14 @@ class CollectorManager:
                     if last_success and event_at < int(datetime.fromisoformat(last_success).timestamp() * 1000) + 3600000:
                         continue
                 with self.lock:
-                    if device['model'] != 'HBF-228T':
+                    attempt = 1
+                    if device['model'] == 'HBF-228T':
+                        failure = self.listen_failures.get(device['id'])
+                        if failure:
+                            if time.monotonic() < failure['retry_at']:
+                                continue
+                            attempt = failure['attempt']
+                    else:
                         burst = self.listen_bursts.setdefault(device['id'], {})
                         last_event = burst.get('last_event_at')
                         synced_at = burst.get('synced_at')
@@ -388,7 +404,7 @@ class CollectorManager:
                     # HBF-228T connects immediately. HEM-6232T keeps the
                     # measured-data-friendly 60-second debounce and one retry.
                     delay = 0 if device['model'] == 'HBF-228T' else 60
-                    self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': 1,
+                    self.listen_delayed[device['id']] = {'due': time.monotonic()+delay, 'attempt': attempt,
                                                         'signature': self.listen_signature(device),
                                                         'advert_at': event_at,
                                                         'advert_fingerprint': event.get('fingerprint'),

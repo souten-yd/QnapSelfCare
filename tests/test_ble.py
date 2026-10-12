@@ -333,23 +333,22 @@ class ProtocolTests(unittest.TestCase):
                 listen = json.loads(job['result'])['diagnostic']['listen']
                 self.assertEqual(listen, {'attempt': 1, 'advert_at': advert, 'request_after_advert_ms': 1500})
                 self.assertFalse(manager.listen_delayed)
-                # A missed scale does not wait out the 300-second minimum interval:
-                # the next advertisement (next measurement) starts at once.
+                # One fresh-advertisement retry is allowed after a 30-second pause.
                 clock.return_value = 105
                 manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 0)  # Same event is already consumed.
-                response['events'][0]['at'] = advert + 5000
-                clock.return_value = 108  # Listener polls every 2 seconds.
+                response['events'][0]['at'] = advert + 30000
+                clock.return_value = 130  # Listener polls every 2 seconds.
                 manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())
                 self.assertEqual(store.jobs()[0]['state'], 'skipped')
-                self.assertIn('次の新しいBluetooth広告', store.jobs()[0]['message'])
+                self.assertIn('5分休止', store.jobs()[0]['message'])
                 self.assertFalse(manager.listen_delayed)
-                # A connection-stage miss also keeps the HBF retry window open
-                # for the next fresh advertisement instead of imposing cooldown.
-                response['events'][0]['at'] = advert + 10000
-                clock.return_value = 111
+                # The second failure pauses for five minutes; only a fresh ad
+                # starts the next bounded attempt, without a blind timer.
+                response['events'][0]['at'] = advert + 330000
+                clock.return_value = 430
                 manager.schedule()
                 self.assertEqual(manager.queue.qsize(), 1)
                 manager.process(manager.queue.get_nowait())

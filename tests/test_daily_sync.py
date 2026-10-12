@@ -91,20 +91,61 @@ class DailySyncTests(unittest.TestCase):
             restored.restore(self.store.backup())
             self.assertEqual(restored.last_listener_sync(d['id']), stamped)
 
-    def test_hbf_failure_has_no_success_cooldown_or_retry_count_limit(self):
+    def test_hbf_failure_storm_is_bounded_and_only_fresh_ads_rearm(self):
         d = self.devices[0]
-        runner = Mock(side_effect=BluetoothFailure('機器が見つかりません。機器を通信可能な状態にし、NASへ近づけてください'))
+        runner = Mock(side_effect=BluetoothFailure('connect failed', {'stage': 'connection', 'rssi': -92}))
         manager = CollectorManager(self.store, runner=runner)
         response = {'supported': True, 'ready': True, 'events': [{'address': d['address'], 'at': 1790000000000}]}
         with patch('collectors.bridge_request', return_value=response), \
              patch('collectors.time.monotonic', return_value=100) as clock:
-            for i in range(4):
-                response['events'][0]['at'] = 1790000000000 + i * 10000
-                clock.return_value = 100 + i * 10
+            for elapsed in range(330):
+                response['events'][0].update(at=1790000000000 + elapsed * 1000,
+                                            fingerprint=str(elapsed))
+                clock.return_value = 100 + elapsed
                 manager.schedule()
-                manager.process(manager.queue.get_nowait())
-            self.assertEqual(runner.call_count, 4)
+                if not manager.queue.empty():
+                    manager.process(manager.queue.get_nowait())
+            self.assertEqual(runner.call_count, 2)
+            self.assertIn('5分休止', self.store.jobs()[0]['message'])
+            self.assertIn('原因は未確定', self.store.jobs()[0]['message'])
             self.assertIsNone(self.store.last_listener_sync(d['id']))
+            # Consume the last fresh packet before expiry, then freeze it.
+            clock.return_value = 429.5
+            manager.next_watch = 0
+            manager.schedule()
+            clock.return_value = 1000
+            manager.schedule()
+            self.assertTrue(manager.queue.empty())
+            response['events'][0]['at'] += 1000
+            clock.return_value = 1002
+            manager.schedule()
+            manager.process(manager.queue.get_nowait())
+            self.assertEqual(runner.call_count, 3)
+            self.assertEqual(manager.listen_failures[d['id']]['attempt'], 2)
+
+    def test_hbf_post_connection_failure_skips_quick_retry_and_manual_can_recover(self):
+        for index, stage in enumerate(('link_security', 'unlock', 'memory', 'unknown')):
+            with self.subTest(stage=stage):
+                d = self.store.save_device({'model': 'HBF-228T', 'address': f'AA:BB:CC:DD:FF:{index:02X}',
+                    'bindings': {'1': self.user['id']}, 'auto_sync': True, 'interval': 300})
+                self.store.pairing_key(d['address'], '11'*16)
+                runner = Mock(side_effect=BluetoothFailure('failed', {'stage': stage}))
+                manager = CollectorManager(self.store, runner=runner)
+                response = {'supported': True, 'ready': True, 'events': [{'address': d['address'], 'at': 1790000000000}]}
+                with patch('collectors.bridge_request', return_value=response), \
+                     patch('collectors.time.monotonic', return_value=100) as clock:
+                    manager.schedule()
+                    manager.process(manager.queue.get_nowait())
+                    response['events'][0]['at'] += 30000
+                    clock.return_value = 130
+                    manager.schedule()
+                    self.assertTrue(manager.queue.empty())
+                    self.assertEqual(manager.listen_failures[d['id']]['retry_at'], 400)
+                    runner.side_effect = None
+                    runner.return_value = {'records': []}
+                    self.sync(manager, d, False)
+                    self.assertNotIn(d['id'], manager.listen_failures)
+                    self.assertEqual(runner.call_count, 2)
 
     def test_interval_midnight_releases_daily_gate(self):
         d = self.store.save_device(dict(self.devices[0], sync_mode='interval'))
