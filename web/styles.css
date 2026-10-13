@@ -180,3 +180,15 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
  .body-summary-card>.body-summary strong{font-size:clamp(16px,4.5vw,22px)}
  .body-summary-card>.body-summary small{font-size:10px}
 }
+
+/* Oscilloscope-like inspection: touch drags horizontally while vertical page scrolling remains available. */
+.chart-cursor-svg{touch-action:pan-y;cursor:crosshair;user-select:none}
+.chart-cursor-svg:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:5px}
+.chart-cursor-readout{display:flex;align-items:center;gap:8px;flex-wrap:wrap;text-align:left;
+  padding:8px 10px;margin:6px 0;background:var(--surface-soft);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:12px;width:100%;min-width:0}
+.chart-cursor-readout strong{font-size:12px;white-space:nowrap}
+.chart-cursor-values{display:flex;flex:1;flex-wrap:wrap;gap:6px}
+.chart-cursor-value{border-left:3px solid var(--chart-primary);padding-left:6px;white-space:nowrap}
+button.chart-cursor-close{margin-left:auto;padding:1px 8px;min-width:30px;min-height:30px;line-height:1.2}
+@media(max-width:700px){.chart-cursor-readout{padding:7px;gap:5px}.chart-cursor-value{white-space:normal}}
