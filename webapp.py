@@ -23,7 +23,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.38"
+VERSION = "0.3.39"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -97,6 +97,7 @@ class Handler(BaseHTTPRequestHandler):
         static = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+                  "/chart-cursor.js": ("chart-cursor.js", "text/javascript; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                   "/migration.js": ("migration.js", "text/javascript; charset=utf-8"),
                   "/wellness.js": ("wellness.js", "text/javascript; charset=utf-8"),

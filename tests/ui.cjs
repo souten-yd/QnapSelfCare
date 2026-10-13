@@ -11,13 +11,16 @@ const base='http://127.0.0.1:18863';
 async function until(check){for(let i=0;i<100;i++){if(await check())return;await new Promise(r=>setTimeout(r,50));}throw Error('UI operation timed out');}
 (async()=>{let dom;try{
  await until(async()=>{try{return (await fetch(base+'/api/status')).ok;}catch{return false;}});
+ const cursorAsset=await fetch(base+'/chart-cursor.js');
+ assert.equal(cursorAsset.status,200);
+ assert.match(await cursorAsset.text(),/attachChartCursor/);
  dom=new JSDOM(fs.readFileSync('web/index.html','utf8'),{url:base,runScripts:'outside-only'});
  const w=dom.window,d=w.document;
  const appSource=fs.readFileSync('web/app.js','utf8');
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
+ w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -28,6 +31,16 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent.includes('1件保存'));
  await until(()=>d.getElementById('history').textContent.includes('最高血圧 130'));
  assert.match(d.getElementById('latest-bp').textContent,/130 \/ 80/);
+ // The dashboard inspector must display exact measured values for both BP series.
+ const bpSvg=d.querySelector('#bp-chart svg.chart-cursor-svg');
+ assert(bpSvg);
+ bpSvg.getBoundingClientRect=()=>({left:0,width:500});
+ const tap=new w.Event('pointerdown',{bubbles:true});
+ Object.defineProperties(tap,{clientX:{value:230},pointerId:{value:1},button:{value:0}});
+ bpSvg.dispatchEvent(tap);
+ assert.match(d.querySelector('#bp-chart .chart-cursor-readout').textContent,/最高血圧 130 mmHg/);
+ assert.match(d.querySelector('#bp-chart .chart-cursor-readout').textContent,/最低血圧 80 mmHg/);
+ assert.equal(bpSvg.querySelector('.chart-cursor-overlay').getAttribute('visibility'),'visible');
  // The Tokyo calendar day controls each badge, including the UTC day boundary.
  w.__testMark('bp-today-star',{measured_at:'2026-09-26T15:00:00Z'},new Date('2026-09-27T00:01:00Z'));
  assert.equal(d.getElementById('bp-today-star').hidden,false);
@@ -144,6 +157,8 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent==='活動記録を保存しました');
  assert.match(d.getElementById('activity-list').textContent,/-400 kcal/);
  assert(d.querySelector('#energy-chart svg'));
+ assert(d.querySelector('#energy-chart svg.chart-cursor-svg'));
+ assert.equal(d.querySelector('#energy-chart svg').getAttribute('tabindex'),'0');
  const energyUrl='/api/wellness/energy?user_id='+d.getElementById('current-user').value;
  let energyState=await (await fetch(base+energyUrl)).json();
  assert.equal(energyState.routine.intake_kcal,2100);

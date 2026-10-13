@@ -63,6 +63,12 @@ function energyPlot(id,series,unit){
  make('polyline',{points:usable.map(p=>x(p.date)+','+y(p.value)).join(' '),fill:'none',stroke:s.color,'stroke-width':2,'stroke-dasharray':s.dash?'5 4':'none'});
  for(const p of usable.filter((_,i)=>i%Math.max(1,Math.ceil(usable.length/400))===0)){const n=make('circle',{cx:x(p.date),cy:y(p.value),r:2.5,fill:s.color});const t=document.createElementNS(ns,'title');t.textContent=p.date+' '+s.name+' '+p.value+' '+unit;n.append(t);}}
  make('text',{x:52,y:217,fill:'currentColor','font-size':12},new Date(xmin).toISOString().slice(0,10));make('text',{x:466,y:217,'text-anchor':'end',fill:'currentColor','font-size':12},new Date(xmax).toISOString().slice(0,10));container.append(svg);
+ const cursorDates=new Map();
+ for(const s of series){for(const p of s.points){if(p.value==null||!Number.isFinite(p.value))continue;
+  if(!cursorDates.has(p.date))cursorDates.set(p.date,{x:x(p.date),label:p.date,fields:[]});
+  cursorDates.get(p.date).fields.push({label:s.name,value:p.value,unit,y:y(p.value),color:s.color});
+ }}
+ window.attachChartCursor(container,svg,[...cursorDates.values()],{viewWidth:480,top:20,bottom:190});
  const legend=element('div',undefined,'energy-legend');for(const s of series){const item=element('span',(s.dash?'┄ ':'● ')+s.name);item.style.color=s.color;legend.append(item);}container.append(legend);
 }
 function drawEnergy(){
