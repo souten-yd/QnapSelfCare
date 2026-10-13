@@ -65,12 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.38 >/dev/null 2>&1; then
-            echo 'Release v0.3.38 already exists; leaving it unchanged.'
+          if gh release view v0.3.39 >/dev/null 2>&1; then
+            echo 'Release v0.3.39 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.38 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.38' \
-            --notes 'Bound HBF-228T advertisement-driven connection retries: wait at least 30 seconds before one retry, then pause for 5 minutes. Authentication and data failures pause immediately. Preserve the one-hour gate after success and manual synchronization. Weak-signal connection failures now include placement guidance without claiming a confirmed RF cause.' \
+          gh release create v0.3.39 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.39' \
+            --notes 'Add tap-and-drag vertical inspection cursors to blood pressure, body composition, energy and weight-plan charts. Display exact recorded values with units on iPhone and desktop. No changes to measurement collection or storage.' \
             --target "$GITHUB_SHA"
