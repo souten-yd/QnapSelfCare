@@ -11,6 +11,9 @@ const base='http://127.0.0.1:18863';
 async function until(check){for(let i=0;i<100;i++){if(await check())return;await new Promise(r=>setTimeout(r,50));}throw Error('UI operation timed out');}
 (async()=>{let dom;try{
  await until(async()=>{try{return (await fetch(base+'/api/status')).ok;}catch{return false;}});
+ const cursorAsset=await fetch(base+'/chart-cursor.js');
+ assert.equal(cursorAsset.status,200);
+ assert.match(await cursorAsset.text(),/attachChartCursor/);
  dom=new JSDOM(fs.readFileSync('web/index.html','utf8'),{url:base,runScripts:'outside-only'});
  const w=dom.window,d=w.document;
  const appSource=fs.readFileSync('web/app.js','utf8');
@@ -154,6 +157,8 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  await until(()=>d.getElementById('message').textContent==='活動記録を保存しました');
  assert.match(d.getElementById('activity-list').textContent,/-400 kcal/);
  assert(d.querySelector('#energy-chart svg'));
+ assert(d.querySelector('#energy-chart svg.chart-cursor-svg'));
+ assert.equal(d.querySelector('#energy-chart svg').getAttribute('tabindex'),'0');
  const energyUrl='/api/wellness/energy?user_id='+d.getElementById('current-user').value;
  let energyState=await (await fetch(base+energyUrl)).json();
  assert.equal(energyState.routine.intake_kcal,2100);
