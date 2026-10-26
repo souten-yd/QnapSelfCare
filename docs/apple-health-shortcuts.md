@@ -133,6 +133,54 @@ JSONバックアップはschema 2へ更新し、新テーブルを含める。sc
 
 ## 参考
 
+### ショートカットでの具体的な送信例と切り分け
+
+まず心拍の直近1日・最大10件で試す。アクションの流れ：
+「ヘルスケアサンプルを検索」→「各項目を繰り返す」→「ヘルスケアサンプルの詳細を取得」
+（値・単位・開始日・終了日・ソース）→「日付をフォーマット」（ISO 8601）→「辞書」
+→「変数に追加」（samples配列）→「URLの内容を取得」（POST、JSON）。
+schemaは数値1、samplesは辞書の配列、valueは数値（睡眠だけ文字列）にする。
+配列や辞書を引用符付き文字列に変換しない。source_idは通常の詳細取得では保証されないため省略する。
+sourceは実際のソース名を使用する。日本語の名称やアクションの表示はiOSによって異なる。
+日付フォーマットでISO 8601が選べない場合は `yyyy-MM-dd'T'HH:mm:ssXXX` を使い、
+タイムゾーンを含める。表示値と単位を確認し、距離やSpO₂を値の大きさだけで変換しない。
+睡眠の区分取得は実機で確認する。APIのunit:nullを空文字や文字列"null"へ置き換えない。
+
+最初は最終JSONを「クイックルック」などで確認し、NASへ送信する。
+接続のみの確認は `{"schema":1,"user_id":"登録済みID","samples":[]}` でよい。
+空送信は測定データを追加・削除せず、ヘルスケア権限や実サンプルの取得成功を証明しない。
+実送信前にHUAWEIアプリの同期を済ませる。自動化は「時刻」等で実行できるが、
+読み出しはロック状態に制約があるため、HUAWEIアプリを閉じたとき等のトリガーも候補。
+閉じたこと自体は同期完了を保証しないため、7日分の再送と手動ボタンを残す。
+
+### 設定画面の受信デバッグ
+
+設定・バックアップ → 「iPhoneショートカット連携・受信デバッグ」を開く。
+送信先URLを確認し、「10分間の記録を開始」→ iPhoneから送信 → 「受信状況を更新」。
+受信日時、HTTPステータス、保存／重複件数、エラー、受信本文プレビューを確認できる。
+「ログをダウンロード」でJSON出力。「停止・消去」で記録停止とメモリ内ログ削除。
+「ログを消去」は記録を継続したまま現在のログだけを削除する。
+ダウンロードしたファイルは自動消去されないため、共有前に健康情報を確認する。
+
+- 初期OFF。最新20件、本文は先頭8192バイトまで。切り詰めは表示用でありAPIの入力は切り詰めない。
+- RAMのみ。10分後のタイマーで停止・消去し、再起動でも消える。通常ログ・DB・バックアップには含めない。
+- 再度開始すると既存ログを消去し10分の期限を更新する。受信中に停止したリクエストのログは後から追加しない。
+- 対象は `POST /api/apple-health/import` のみ。JSON不正も記録。ヘッダー検証で失敗した場合は本文を読み取らない。
+- Authorization等のヘッダー、IP、URLクエリーはログに含めない。本文に入れた内容は健康情報も含めて記録される。
+- `GET /api/apple-health/debug`、`GET /api/apple-health/debug/download` で確認・出力。
+- `POST /api/apple-health/debug` + `{"action":"start"}` / `stop` / `clear` で操作。
+  既存のJSON・X-SelfCare-Requestヘッダーが必要。設定画面のボタンからも操作できる。
+- OFF時は本文をデバッグ用に複製しない。画面の自動ポーリング・ディスク追記は追加しない。
+- ログがない場合、リクエストがNASに到達していない可能性がある。DNS、LAN/Tailscale、
+  ポート、iPhoneのロック・権限・自動化を確認する。未到達の失敗はNAS側では記録できない。
+
+### 調査根拠の追加
+
+- Apple自動化の有効化: https://support.apple.com/ja-jp/guide/shortcuts/apd602971e63/ios
+- 実際のShortcuts XMLからの詳細プロパティ確認（第三者の一次実装資料）:
+  https://github.com/viticci/shortcuts-playground-plugin/blob/main/codex/skills/shortcuts-playground/HEALTHKIT.md
+
+
 - Appleショートカット・検索アクション: https://support.apple.com/guide/shortcuts/apd3c845e881/ios
 - Appleショートカット・HTTP/JSON送信: https://support.apple.com/ja-jp/guide/shortcuts/apd58d46713f/ios
 - HealthKitプライバシー: https://developer.apple.com/documentation/healthkit/protecting-user-privacy

@@ -64,6 +64,41 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error: self.request(path, body)
         self.assertEqual(error.exception.code, 503)
 
+    def test_health_debug_capture_bad_json_headers_and_success(self):
+        from test_apple_health import sample
+        from health_debug import for_server
+        user = self.server.store.save_user({'name': 'Health'})['id']
+        data = dict(schema=1, user_id=user, samples=[sample()])
+        path = '/api/apple-health/import'
+        with self.request(path, data): pass
+        self.assertEqual(for_server(self.server).snapshot()['entries'], [])
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/debug', {'action': 'start'}, header=False)
+        self.assertEqual(error.exception.code, 403)
+        with self.request('/api/apple-health/debug', {'action': 'start'}): pass
+        with self.request(path, data): pass
+        with self.assertRaises(HTTPError): self.request(path, data, header=False)
+        req = Request(self.base + path, data=b'{"samples":broken}', headers={
+            'Content-Type': 'application/json', 'X-SelfCare-Request': '1', 'Authorization': 'secret'})
+        with self.assertRaises(HTTPError) as error: urlopen(req, timeout=3)
+        self.assertEqual(error.exception.code, 400)
+        with self.request('/api/apple-health/debug/download') as response:
+            self.assertIn('attachment', response.headers['Content-Disposition'])
+            captured = json.load(response)
+        self.assertEqual([r['status'] for r in captured['entries']], [200, 403, 400])
+        self.assertEqual(captured['entries'][0]['result']['duplicates'], 1)
+        self.assertEqual(captured['entries'][1]['body_preview'], '')
+        self.assertEqual(captured['entries'][2]['body_preview'], '{"samples":broken}')
+        self.assertNotIn('secret', json.dumps(captured))
+        self.assertNotIn('body_preview', json.dumps(self.server.store.backup()))
+        with self.request('/api/apple-health/debug', {'action': 'stop'}): pass
+        self.assertEqual(for_server(self.server).snapshot()['entries'], [])
+        with self.request('/health-debug.js') as response: self.assertEqual(response.status, 200)
+        with self.request('/') as response:
+            html = response.read().decode()
+            self.assertIn('id="health-debug-panel"', html)
+            self.assertIn('<script src="/health-debug.js" defer></script>', html)
+
     def test_idle_http_poll_does_not_write_access_log_to_stderr(self):
         # QPKG redirects stderr to persistent selfcare.log, so GET polling
         # must never append access lines. User records are handled by SQLite.
