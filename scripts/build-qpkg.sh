@@ -17,7 +17,7 @@ cp "$root/qpkg/qpkg.cfg" "$work/qpkg.cfg"
 cp "$root/qpkg/package_routines" "$work/package_routines"
 cp "$root/qpkg/shared/selfcare-backup" "$root/qpkg/shared/selfcare-update" "$root/qpkg/shared/selfcare.sh" "$root/qpkg/shared/python3-path" "$root/qpkg/shared/PREVIEW.txt" "$root/updater.py" "$root/webapp.py" "$work/shared/"
 cp -R "$root/web" "$work/shared/web"
-cp "$root/homehub_migration.py" "$root/durability.py" "$root/protection.py" "$root/storage.py" "$root/omron_csv.py" "$root/wellness.py" "$root/energy.py" "$root/wellness_ai.py" "$root/collectors.py" "$root/ble_protocol.py" "$root/ble_worker.py" "$root/ble_bridge.py" "$root/self_update.py" "$root/requirements-ble.txt" "$root/THIRD_PARTY.md" "$root/README.md" "$work/shared/"
+cp "$root/homehub_migration.py" "$root/durability.py" "$root/protection.py" "$root/storage.py" "$root/apple_health.py" "$root/omron_csv.py" "$root/wellness.py" "$root/energy.py" "$root/wellness_ai.py" "$root/collectors.py" "$root/ble_protocol.py" "$root/ble_worker.py" "$root/ble_bridge.py" "$root/self_update.py" "$root/requirements-ble.txt" "$root/THIRD_PARTY.md" "$root/README.md" "$work/shared/"
 cp -R "$root/homehub" "$root/licenses" "$root/bluetooth" "$root/docs" "$work/shared/"
 mkdir -p "$work/shared/scripts"
 cp "$root/scripts/install-ble.sh" "$work/shared/scripts/"
@@ -33,3 +33,4 @@ if [[ ${#packages[@]} -ne 1 ]]; then
 fi
 qbuild --query info "${packages[0]}"
 cp "${packages[0]}" "$output/QnapSelfCare_${QPKG_VER}_${arch}.qpkg"
+

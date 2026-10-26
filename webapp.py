@@ -1,4 +1,5 @@
 """QnapSelfCare local health record manager."""
+import apple_health
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -127,6 +128,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.server.coach.status())
         elif path == "/api/devices":
             self._json(200, self.store.devices())
+        elif path == "/api/apple-health/samples":
+            self._json(200, apple_health.history(self.store, query.get('user_id', [''])[0],
+                since=query.get('since', [None])[0], until=query.get('until', [None])[0],
+                limit=integer(query.get('limit', ['200'])[0], '件数', 1, 1000),
+                offset=integer(query.get('offset', ['0'])[0], '開始位置', 0, 10000000)))
         elif path == "/api/records":
             self._json(200, self.store.records(**self._filters(query),
                 limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),
@@ -260,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.store.add_records([body])
                 elif re.fullmatch(r"/api/records/[A-Za-z0-9_-]{1,64}", path):
                     result = self.store.edit_record(path.rsplit("/", 1)[1], body)
+                elif path == "/api/apple-health/import":
+                    result = apple_health.ingest(self.store, body)
                 elif path == "/api/import":
                     result = self.store.import_csv(body.get("csv"), body.get("user_id")) if "csv" in body else self.store.add_records(body.get("records"), "api")
                 elif path in ('/api/omron-history/preview', '/api/omron-history/apply'):
@@ -341,3 +349,4 @@ def serve(args):
 
 if __name__ == "__main__":
     main()
+

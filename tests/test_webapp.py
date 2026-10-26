@@ -40,6 +40,30 @@ class WebAppTests(unittest.TestCase):
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
+    def test_apple_health_http_contract(self):
+        from test_apple_health import sample
+        user = self.server.store.save_user({'name': 'Health'})['id']
+        body = dict(schema=1, user_id=user, samples=[sample()])
+        path = '/api/apple-health/import'
+        with self.assertRaises(HTTPError) as error:
+            self.request(path, body, header=False)
+        self.assertEqual(error.exception.code, 403)
+        for inserted in (1, 0):
+            with self.request(path, body) as response:
+                self.assertEqual(json.load(response)['inserted'], inserted)
+        with self.request('/api/apple-health/samples?user_id=' + user) as response:
+            self.assertEqual(json.load(response)['total'], 1)
+        body['samples'].append(sample('weight', 80, 'kg'))
+        with self.assertRaises(HTTPError) as error: self.request(path, body)
+        self.assertEqual(error.exception.code, 400)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/samples?user_id=' + user + '&limit=1001')
+        self.assertEqual(error.exception.code, 400)
+        self.server.store.error = 'protected'
+        body['samples'] = [sample()]
+        with self.assertRaises(HTTPError) as error: self.request(path, body)
+        self.assertEqual(error.exception.code, 503)
+
     def test_idle_http_poll_does_not_write_access_log_to_stderr(self):
         # QPKG redirects stderr to persistent selfcare.log, so GET polling
         # must never append access lines. User records are handled by SQLite.
@@ -211,3 +235,4 @@ class WebAppTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

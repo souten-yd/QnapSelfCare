@@ -1,0 +1,153 @@
+"""Versioned, sample-only Apple Health receiver. No HealthKit/network side effects."""
+from datetime import datetime, timezone
+import hashlib
+import json
+import math
+
+METRICS = {
+    'steps': ('count', 0, 1000000),
+    'walking_running_distance': ('m', 0, 1000000),
+    'active_energy': ('kcal', 0, 100000),
+    'heart_rate': ('bpm', 1, 400),
+    'oxygen_saturation': ('%', 0, 100),
+    'sleep': (None, None, None),
+}
+STAGES = {'awake', 'in_bed', 'asleep_unspecified', 'core', 'deep', 'rem'}
+SCHEMA_SQL = '''
+CREATE TABLE IF NOT EXISTS apple_health_samples(
+    user_id TEXT NOT NULL REFERENCES users(id),
+    sample_key TEXT NOT NULL, metric TEXT NOT NULL,
+    start_at TEXT NOT NULL, end_at TEXT NOT NULL,
+    payload TEXT NOT NULL, received_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, sample_key));
+CREATE INDEX IF NOT EXISTS apple_health_history
+    ON apple_health_samples(user_id, start_at, sample_key);
+'''
+
+
+def string(value, name, maximum=200):
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise ValueError(name + 'が不正です')
+    return value.strip()
+
+
+def instant(value):
+    value = string(value, '日時', 64)
+    try:
+        date = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if date.tzinfo is None or not 2000 <= date.year <= 2100:
+            raise ValueError()
+        return date.astimezone(timezone.utc).isoformat(timespec='microseconds')
+    except ValueError:
+        raise ValueError('日時はタイムゾーン付きISO 8601で指定してください') from None
+
+
+def normalize(sample):
+    required = {'metric', 'start_at', 'end_at', 'value', 'unit', 'source'}
+    if not isinstance(sample, dict) or not required <= set(sample) or set(sample) - required - {'source_id', 'device'}:
+        raise ValueError('サンプルの項目が不正です')
+    metric = sample['metric']
+    if not isinstance(metric, str) or metric not in METRICS:
+        raise ValueError('許可されていない項目です（体重・BMI・体組成は対象外）')
+    result = {k: sample[k] for k in required}
+    result['source'] = string(sample['source'], '記録元')
+    for field in ('source_id', 'device'):
+        if field in sample:
+            result[field] = string(sample[field], field)
+    result['start_at'], result['end_at'] = instant(sample['start_at']), instant(sample['end_at'])
+    if result['end_at'] < result['start_at']:
+        raise ValueError('終了日時が開始日時より前です')
+    value, unit = sample['value'], sample['unit']
+    if metric == 'sleep':
+        if unit is not None or not isinstance(value, str) or value not in STAGES or result['end_at'] == result['start_at']:
+            raise ValueError('睡眠は有効な区分と開始・終了日時、unit:nullが必要です')
+    else:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError('有限の数値が必要です')
+        value = float(value)
+        # Conversions are explicit; never guess percent from the magnitude.
+        conversions = {('walking_running_distance', 'km'): 1000,
+                       ('active_energy', 'kJ'): 1 / 4.184,
+                       ('oxygen_saturation', 'fraction'): 100}
+        if isinstance(unit, str) and (metric, unit) in conversions:
+            value *= conversions[(metric, unit)]
+            unit = METRICS[metric][0]
+        canonical, low, high = METRICS[metric]
+        if unit != canonical or not low <= value <= high or (metric == 'steps' and not value.is_integer()):
+            raise ValueError('単位または値が不正です')
+        result['value'], result['unit'] = round(value, 8), unit
+    return result
+
+
+def encoded(sample):
+    return json.dumps(sample, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+
+def insert(db, user_id, sample, received_at):
+    payload = encoded(sample)
+    identity = ({k: sample[k] for k in ('metric', 'source', 'source_id')}
+                if 'source_id' in sample else sample)
+    key = hashlib.sha256(encoded(identity).encode()).hexdigest()
+    old = db.execute('SELECT payload FROM apple_health_samples WHERE user_id=? AND sample_key=?', (user_id, key)).fetchone()
+    if old:
+        if old[0] != payload:
+            raise ValueError('同じ元IDの内容が変わっています。自動上書きせず再照合してください')
+        return 0
+    db.execute('INSERT INTO apple_health_samples VALUES(?,?,?,?,?,?,?)',
+               (user_id, key, sample['metric'], sample['start_at'], sample['end_at'], payload, received_at))
+    return 1
+
+
+def ingest(store, body):
+    if (not isinstance(body, dict) or set(body) != {'schema', 'user_id', 'samples'}
+            or type(body['schema']) is not int or body['schema'] != 1):
+        raise ValueError('schema:1, user_id, samplesを指定してください')
+    samples = body['samples']
+    if not isinstance(samples, list) or len(samples) > 1000:
+        raise ValueError('1リクエストは最大1000サンプルです。分割して送信してください')
+    normalized = [normalize(s) for s in samples]
+    received_at = datetime.now(timezone.utc).isoformat(timespec='microseconds')
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if not isinstance(body['user_id'], str) or not db.execute('SELECT 1 FROM users WHERE id=?', (body['user_id'],)).fetchone():
+            raise ValueError('登録済みの利用者を指定してください')
+        inserted = sum(insert(db, body['user_id'], s, received_at) for s in normalized)
+    # connect() commits before this response can be returned; no RAM-only acknowledgement.
+    return {'inserted': inserted, 'duplicates': len(samples) - inserted, 'received': len(samples)}
+
+
+def history(store, user_id, since=None, until=None, limit=200, offset=0):
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError('user_idが必要です')
+    terms, args = ['user_id=?'], [user_id]
+    start, end = instant(since) if since else None, instant(until) if until else None
+    if start and end and start >= end:
+        raise ValueError('期間が不正です')
+    if start:
+        terms.append('end_at>=?'); args.append(start)
+    if end:
+        terms.append('start_at<?'); args.append(end)
+    where = ' AND '.join(terms)
+    with store.connect() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise ValueError('利用者が見つかりません')
+        total = db.execute('SELECT COUNT(*) FROM apple_health_samples WHERE ' + where, args).fetchone()[0]
+        rows = db.execute('SELECT payload,received_at FROM apple_health_samples WHERE ' + where +
+                          ' ORDER BY start_at,sample_key LIMIT ? OFFSET ?', args + [limit, offset]).fetchall()
+    return {'total': total, 'samples': [dict(json.loads(r[0]), received_at=r[1]) for r in rows]}
+
+
+def backup_rows(db):
+    return [dict(user_id=r[0], sample=json.loads(r[1]), received_at=r[2]) for r in
+            db.execute('SELECT user_id,payload,received_at FROM apple_health_samples ORDER BY user_id,start_at,sample_key')]
+
+
+def restore_rows(db, rows, users):
+    if not isinstance(rows, list):
+        raise ValueError('Apple Healthバックアップが不正です')
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {'user_id', 'sample', 'received_at'}
+                or not isinstance(row['user_id'], str) or row['user_id'] not in users):
+            raise ValueError('Apple Healthバックアップの利用者・項目が不正です')
+        if not insert(db, row['user_id'], normalize(row['sample']), instant(row['received_at'])):
+            raise ValueError('バックアップ内でApple Healthサンプルが重複しています')

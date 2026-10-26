@@ -16,6 +16,7 @@ import time
 import copy
 
 from durability import (CorruptDatabase, DataUnavailable, check_database, corruption, write_json)
+import apple_health
 import omron_csv
 import wellness
 import energy
@@ -163,6 +164,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS ai_settings(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
                 PRAGMA user_version=1;
             ''')
+            db.executescript(apple_health.SCHEMA_SQL)
             db.execute("UPDATE jobs SET state='failed',finished_at=?,message=? WHERE state IN ('queued','running')",
                        (now(), "サービス再起動により中断されました。再実行してください"))
         os.chmod(self.path, 0o600)
@@ -206,6 +208,8 @@ class Store:
 
     def delete_user(self, identifier):
         with self.connect() as db:
+            if db.execute("SELECT 1 FROM apple_health_samples WHERE user_id=?", (identifier,)).fetchone():
+                raise ValueError("Apple Health記録のある利用者は削除できません")
             if db.execute("SELECT 1 FROM measurements WHERE user_id=?", (identifier,)).fetchone():
                 raise ValueError("記録のある利用者は削除できません")
             for row in db.execute("SELECT config FROM devices"):
@@ -644,7 +648,7 @@ class Store:
     def backup(self):
         with self.connect() as db:
             db.execute("BEGIN")
-            return {"format": "QnapSelfCare", "schema": 1, "created_at": now(),
+            return {"format": "QnapSelfCare", "schema": 2, "created_at": now(),
                     "users": [dict(r) for r in db.execute("SELECT * FROM users")],
                     "devices": [dict(json.loads(r["config"]), id=r["id"]) for r in db.execute("SELECT * FROM devices")],
                     "automatic_sync_days": [dict(r) for r in db.execute('SELECT * FROM automatic_sync_days')],
@@ -657,11 +661,14 @@ class Store:
                     "meal_notes": [dict(r) for r in db.execute('SELECT * FROM meal_notes')],
                     "ai_settings": (json.loads(value[0]) if (value := db.execute('SELECT config FROM ai_settings WHERE id=1').fetchone()) else None),
                     "deleted": [r[0] for r in db.execute("SELECT fingerprint FROM deleted_measurements")],
+                    "apple_health_samples": apple_health.backup_rows(db),
                     "records": [self.unpack(r) for r in db.execute("SELECT * FROM measurements")]}
 
     def restore(self, backup):
-        if not isinstance(backup, dict) or backup.get("format") != "QnapSelfCare" or backup.get("schema") != 1:
+        if not isinstance(backup, dict) or backup.get("format") != "QnapSelfCare" or backup.get("schema") not in (1, 2):
             raise ValueError("対応するバックアップ形式ではありません")
+        if backup['schema'] == 2 and 'apple_health_samples' not in backup:
+            raise ValueError("schema 2にはApple Health記録の配列が必要です")
         users, devices, records = (backup.get(k) for k in ("users", "devices", "records"))
         if not all(isinstance(v, list) for v in (users, devices, records)) or len(records) > 100000:
             raise ValueError("バックアップが不正、または100000件を超えています")
@@ -704,6 +711,7 @@ class Store:
                 normalized["id"] = identifier(record.get("id"), "記録ID")
                 normalized["received_at"] = timestamp(record.get("received_at"))
                 self._insert(db, normalized)
+            apple_health.restore_rows(db, backup.get("apple_health_samples", []), user_ids)
             for fingerprint in backup.get("deleted", []):
                 if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
                     raise ValueError("削除記録の形式が不正です")
@@ -813,3 +821,4 @@ class Store:
                     db.execute('INSERT INTO automatic_sync_days VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET completed_at=excluded.completed_at',
                                (job['device_id'], finished))
         self._clear_read_cache()
+
