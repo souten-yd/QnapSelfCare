@@ -150,7 +150,7 @@ class ShortcutsGroupsTests(unittest.TestCase):
         self.assertEqual(ah.ingest(self.store, self.grouped([row], 'walking_running_distance', 'km'))['duplicates'], 1)
 
     def test_groups_validation_and_conflict_are_atomic(self):
-        for change in [dict(value='72'), dict(value='72 bpm'), dict(unit='unknown'),
+        for change in [dict(value='72 bpm'), dict(unit='unknown'),
                        dict(value=True), dict(end='bad')]:
             bad = self.row(); bad.update(change)
             with self.assertRaisesRegex(ValueError, r'groups\[1\] samples\[2\]'):
@@ -184,6 +184,61 @@ class ShortcutsGroupsTests(unittest.TestCase):
         rows[-1]['value'] = 'invalid'
         with self.assertRaises(ValueError): ah.ingest(self.store, body)
         self.assertEqual(ah.history(self.store, self.user)['total'], 50000)
+
+    def test_shortcuts_text_containers_and_numeric_text(self):
+        rows = [dict(self.row(), value='72'), dict(self.row(), value='73')]
+        for separator in ('\n', r'\n'):
+            group = self.grouped([])['groups'][0]
+            group['samples'] = separator.join(json.dumps(r) for r in rows)
+            body = dict(schema=2, user_id=self.user, groups=json.dumps(group))
+            result = ah.ingest(self.store, body)
+            self.assertEqual(result['received'], 2)
+        body = self.grouped([])
+        body['groups'][0]['samples'] = [json.dumps(rows[0])]
+        body['groups'] = [json.dumps(body['groups'][0])]
+        self.assertEqual(ah.ingest(self.store, body)['duplicates'], 1)
+        self.assertEqual(self.send([sample()])['duplicates'], 1)
+
+    def test_extra_sample_braces_preserve_values_and_replay(self):
+        row = dict(self.row(), value='72', device='literal {{braces}}')
+        wrapped = '{' + json.dumps(row) + '}'
+        group = self.grouped([])['groups'][0]
+        for payload in (wrapped, wrapped + '\n' + wrapped,
+                        wrapped + r'\n' + wrapped, [wrapped]):
+            group['samples'] = payload
+            result = ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=group))
+            self.assertEqual(result['received'], 2 if isinstance(payload, str) and payload.count('start') == 2 else 1)
+        saved = ah.history(self.store, self.user)['samples']
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['device'], row['device'])
+        self.assertEqual(saved[0]['value'], 72)
+        self.assertEqual(saved[0]['start_at'], ah.instant(row['start']))
+        self.assertEqual(saved[0]['end_at'], ah.instant(row['end']))
+
+    def test_malformed_extra_braces_are_atomic(self):
+        valid = '{' + json.dumps(self.row()) + '}'
+        for bad in (valid[:-1], valid + '}', '{' + valid + '}',
+                    valid + 'garbage', '{{"value":"72"}}'):
+            group = self.grouped([])['groups'][0]
+            group['samples'] = valid + '\n' + bad
+            with self.assertRaises(ValueError):
+                ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=group))
+            self.assertEqual(ah.history(self.store, self.user)['total'], 0)
+
+    def test_shortcuts_missing_time_and_ambiguous_text_rejected(self):
+        for value in ('70\n72\n69', '', '[70,72]', '"70"', 'null'):
+            with self.assertRaises(ValueError):
+                ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=value))
+        for value in ('NaN', 'Infinity', '72 bpm', '1,200', '1e999'):
+            with self.assertRaises(ValueError):
+                ah.ingest(self.store, self.grouped([dict(self.row(), value=value)]))
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store, self.grouped([{'value': '72'}]))
+        group = self.grouped([])['groups'][0]
+        group['samples'] = json.dumps(self.row()) + '\nBROKEN'
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=json.dumps(group)))
+        self.assertEqual(ah.history(self.store, self.user)['total'], 0)
 
     def test_empty_groups_are_not_completion_proof(self):
         result = ah.ingest(self.store, self.grouped([]))
