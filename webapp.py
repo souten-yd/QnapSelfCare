@@ -1,4 +1,6 @@
 """QnapSelfCare local health record manager."""
+import apple_health
+import health_debug
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -23,7 +25,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.39"
+VERSION = "0.3.40"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -78,6 +80,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, status, value):
+        if getattr(self, '_health_debug_session', None):
+            health_debug.for_server(self.server).record(self._health_debug_session, status, value,
+                getattr(self, '_health_debug_preview', ''), getattr(self, '_health_debug_size', None),
+                getattr(self, '_health_debug_truncated', False))
+            self._health_debug_session = None
         self._send(status, json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
 
     def _filters(self, query):
@@ -98,6 +105,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/styles.css": ("styles.css", "text/css; charset=utf-8"),
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
                   "/chart-cursor.js": ("chart-cursor.js", "text/javascript; charset=utf-8"),
+                  "/health-debug.js": ("health-debug.js", "text/javascript; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                   "/migration.js": ("migration.js", "text/javascript; charset=utf-8"),
                   "/wellness.js": ("wellness.js", "text/javascript; charset=utf-8"),
@@ -127,6 +135,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.server.coach.status())
         elif path == "/api/devices":
             self._json(200, self.store.devices())
+        elif path in ('/api/apple-health/debug', '/api/apple-health/debug/download'):
+            data = health_debug.for_server(self.server).snapshot()
+            if path.endswith('/download'):
+                self._send(200, json.dumps(data, ensure_ascii=False, indent=2).encode(),
+                           'application/json; charset=utf-8', 'selfcare-shortcuts-debug.json')
+            else:
+                self._json(200, data)
+        elif path == "/api/apple-health/samples":
+            self._json(200, apple_health.history(self.store, query.get('user_id', [''])[0],
+                since=query.get('since', [None])[0], until=query.get('until', [None])[0],
+                limit=integer(query.get('limit', ['200'])[0], '件数', 1, 1000),
+                offset=integer(query.get('offset', ['0'])[0], '開始位置', 0, 10000000)))
         elif path == "/api/records":
             self._json(200, self.store.records(**self._filters(query),
                 limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),
@@ -179,7 +199,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("Content-Lengthを指定してください")
         size = integer(self.headers.get("Content-Length", "0"), "リクエストサイズ", 2, MAX_BODY)
-        body = json.loads(self.rfile.read(size), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("有限の数値が必要です")))
+        raw = self.rfile.read(size)
+        if getattr(self, '_health_debug_session', None):
+            self._health_debug_size = len(raw)
+            self._health_debug_preview = raw[:8192].decode('utf-8', errors='replace')
+            self._health_debug_truncated = len(raw) > 8192
+        body = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("有限の数値が必要です")))
         if not isinstance(body, dict):
             raise ValueError("JSONオブジェクトが必要です")
         return body
@@ -191,6 +216,12 @@ class Handler(BaseHTTPRequestHandler):
         self.mutate("DELETE")
 
     def mutate(self, method):
+        self._health_debug_session = None
+        self._health_debug_preview = ''
+        self._health_debug_size = None
+        self._health_debug_truncated = False
+        if method == 'POST' and urlsplit(self.path).path == '/api/apple-health/import':
+            self._health_debug_session = health_debug.for_server(self.server).begin()
         try:
             body = self._body()
             path = urlsplit(self.path).path
@@ -260,6 +291,12 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.store.add_records([body])
                 elif re.fullmatch(r"/api/records/[A-Za-z0-9_-]{1,64}", path):
                     result = self.store.edit_record(path.rsplit("/", 1)[1], body)
+                elif path == "/api/apple-health/debug":
+                    if set(body) != {'action'} or not isinstance(body['action'], str):
+                        raise ValueError('actionのみ指定してください')
+                    result = health_debug.for_server(self.server).control(body['action'])
+                elif path == "/api/apple-health/import":
+                    result = apple_health.ingest(self.store, body)
                 elif path == "/api/import":
                     result = self.store.import_csv(body.get("csv"), body.get("user_id")) if "csv" in body else self.store.add_records(body.get("records"), "api")
                 elif path in ('/api/omron-history/preview', '/api/omron-history/apply'):
@@ -341,3 +378,4 @@ def serve(args):
 
 if __name__ == "__main__":
     main()
+

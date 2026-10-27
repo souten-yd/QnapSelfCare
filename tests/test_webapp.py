@@ -40,6 +40,100 @@ class WebAppTests(unittest.TestCase):
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
+    def test_apple_health_http_contract(self):
+        from test_apple_health import sample
+        user = self.server.store.save_user({'name': 'Health'})['id']
+        body = dict(schema=1, user_id=user, samples=[sample()])
+        path = '/api/apple-health/import'
+        with self.assertRaises(HTTPError) as error:
+            self.request(path, body, header=False)
+        self.assertEqual(error.exception.code, 403)
+        for inserted in (1, 0):
+            with self.request(path, body) as response:
+                self.assertEqual(json.load(response)['inserted'], inserted)
+        with self.request('/api/apple-health/samples?user_id=' + user) as response:
+            self.assertEqual(json.load(response)['total'], 1)
+        body['samples'].append(sample('weight', 80, 'kg'))
+        with self.assertRaises(HTTPError) as error: self.request(path, body)
+        self.assertEqual(error.exception.code, 400)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/samples?user_id=' + user + '&limit=1001')
+        self.assertEqual(error.exception.code, 400)
+        self.server.store.error = 'protected'
+        body['samples'] = [sample()]
+        with self.assertRaises(HTTPError) as error: self.request(path, body)
+        self.assertEqual(error.exception.code, 503)
+
+    def test_grouped_large_http_and_debug_summary(self):
+        from datetime import datetime, timedelta, timezone
+        from health_debug import for_server
+        user = self.server.store.save_user({'name': 'Bulk'})['id']
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        rows = [dict(start=(start + timedelta(minutes=i)).isoformat(),
+                     end=(start + timedelta(minutes=i+1)).isoformat(), value=72) for i in range(50000)]
+        body = dict(schema=2, user_id=user, groups=[
+            dict(type='心拍数', source='HUAWEI', unit='拍/分', samples=rows)])
+        for_server(self.server).control('start')
+        headers = {'Content-Type': 'application/json', 'X-SelfCare-Request': '1'}
+        for expected in (50000, 0):
+            req = Request(self.base + '/api/apple-health/import', data=json.dumps(body).encode(), headers=headers)
+            with urlopen(req, timeout=30) as response:
+                result = json.load(response)
+            self.assertEqual(result['received'], 50000)
+            self.assertEqual(result['inserted'], expected)
+        entry = for_server(self.server).snapshot()['entries'][-1]
+        self.assertTrue(entry['truncated'])
+        self.assertEqual(entry['result']['counts']['heart_rate'], 50000)
+        self.assertIn('processing_ms', entry['result'])
+        rows.append(rows[-1])
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/import', body)
+        self.assertEqual(error.exception.code, 400)
+        import http.client
+        conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        conn.request('POST', '/api/apple-health/import', body=b'',
+                     headers=dict(headers, **{'Content-Length': str(webapp.MAX_BODY + 1)}))
+        response = conn.getresponse()
+        self.assertEqual(response.status, 400)
+        response.read(); conn.close()
+        with self.server.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM apple_health_samples').fetchone()[0], 50000)
+
+    def test_health_debug_capture_bad_json_headers_and_success(self):
+        from test_apple_health import sample
+        from health_debug import for_server
+        user = self.server.store.save_user({'name': 'Health'})['id']
+        data = dict(schema=1, user_id=user, samples=[sample()])
+        path = '/api/apple-health/import'
+        with self.request(path, data): pass
+        self.assertEqual(for_server(self.server).snapshot()['entries'], [])
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/debug', {'action': 'start'}, header=False)
+        self.assertEqual(error.exception.code, 403)
+        with self.request('/api/apple-health/debug', {'action': 'start'}): pass
+        with self.request(path, data): pass
+        with self.assertRaises(HTTPError): self.request(path, data, header=False)
+        req = Request(self.base + path, data=b'{"samples":broken}', headers={
+            'Content-Type': 'application/json', 'X-SelfCare-Request': '1', 'Authorization': 'secret'})
+        with self.assertRaises(HTTPError) as error: urlopen(req, timeout=3)
+        self.assertEqual(error.exception.code, 400)
+        with self.request('/api/apple-health/debug/download') as response:
+            self.assertIn('attachment', response.headers['Content-Disposition'])
+            captured = json.load(response)
+        self.assertEqual([r['status'] for r in captured['entries']], [200, 403, 400])
+        self.assertEqual(captured['entries'][0]['result']['duplicates'], 1)
+        self.assertEqual(captured['entries'][1]['body_preview'], '')
+        self.assertEqual(captured['entries'][2]['body_preview'], '{"samples":broken}')
+        self.assertNotIn('secret', json.dumps(captured))
+        self.assertNotIn('body_preview', json.dumps(self.server.store.backup()))
+        with self.request('/api/apple-health/debug', {'action': 'stop'}): pass
+        self.assertEqual(for_server(self.server).snapshot()['entries'], [])
+        with self.request('/health-debug.js') as response: self.assertEqual(response.status, 200)
+        with self.request('/') as response:
+            html = response.read().decode()
+            self.assertIn('id="health-debug-panel"', html)
+            self.assertIn('<script src="/health-debug.js" defer></script>', html)
+
     def test_idle_http_poll_does_not_write_access_log_to_stderr(self):
         # QPKG redirects stderr to persistent selfcare.log, so GET polling
         # must never append access lines. User records are handled by SQLite.
@@ -211,3 +305,4 @@ class WebAppTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
