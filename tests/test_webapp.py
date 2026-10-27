@@ -64,6 +64,41 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error: self.request(path, body)
         self.assertEqual(error.exception.code, 503)
 
+    def test_grouped_large_http_and_debug_summary(self):
+        from datetime import datetime, timedelta, timezone
+        from health_debug import for_server
+        user = self.server.store.save_user({'name': 'Bulk'})['id']
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        rows = [dict(start=(start + timedelta(minutes=i)).isoformat(),
+                     end=(start + timedelta(minutes=i+1)).isoformat(), value=72) for i in range(50000)]
+        body = dict(schema=2, user_id=user, groups=[
+            dict(type='心拍数', source='HUAWEI', unit='拍/分', samples=rows)])
+        for_server(self.server).control('start')
+        headers = {'Content-Type': 'application/json', 'X-SelfCare-Request': '1'}
+        for expected in (50000, 0):
+            req = Request(self.base + '/api/apple-health/import', data=json.dumps(body).encode(), headers=headers)
+            with urlopen(req, timeout=30) as response:
+                result = json.load(response)
+            self.assertEqual(result['received'], 50000)
+            self.assertEqual(result['inserted'], expected)
+        entry = for_server(self.server).snapshot()['entries'][-1]
+        self.assertTrue(entry['truncated'])
+        self.assertEqual(entry['result']['counts']['heart_rate'], 50000)
+        self.assertIn('processing_ms', entry['result'])
+        rows.append(rows[-1])
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/import', body)
+        self.assertEqual(error.exception.code, 400)
+        import http.client
+        conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        conn.request('POST', '/api/apple-health/import', body=b'',
+                     headers=dict(headers, **{'Content-Length': str(webapp.MAX_BODY + 1)}))
+        response = conn.getresponse()
+        self.assertEqual(response.status, 400)
+        response.read(); conn.close()
+        with self.server.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM apple_health_samples').fetchone()[0], 50000)
+
     def test_health_debug_capture_bad_json_headers_and_success(self):
         from test_apple_health import sample
         from health_debug import for_server

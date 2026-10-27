@@ -51,7 +51,7 @@
 docker compose -f bluetooth/compose.yaml up -d --build</pre><p>Container StationのDocker CLIにPATHが通っているSSHセッションで実行します。専用ドングルを使うか、共用中のHomeHubを先に停止してください。既存HomeHubの設定は自動変更しません。</p><p>初回は機器をペアリングモード（血圧計は「-P-」表示）にして「ペアリング」を押します。スマートフォンと機器の同時接続は避けてください。その後「履歴を同期」を実行します。機器が通信可能な間にのみ同期できます。</p><p>QPKG更新後は同じコマンドでコンテナも再ビルドしてください。詳しくは同梱README・USB Bluetooth手順を参照してください。</p></details></section>
 <section id="settings" class="page" hidden><div class="eyebrow">SETTINGS & DATA</div><h1>設定・バックアップ</h1><details class="card" id="health-debug-panel"><summary>iPhoneショートカット連携・受信デバッグ</summary>
 <p>送信先：<code id="health-import-url"></code></p>
-<p>POST・JSON形式で送信し、ヘッダーに X-SelfCare-Request: 1 を設定します。対象は歩数・距離・活動エネルギー・心拍・SpO₂・睡眠です。</p>
+<p>POST・JSON形式で送信し、ヘッダーに X-SelfCare-Request: 1 を設定します。対象は歩数・距離・活動エネルギー・心拍・SpO₂・睡眠です。簡易形式 schema:2 は項目別 groups に開始・終了・値をまとめて送れます。合計50,000件・32 MiBまで。受信結果に項目別件数・日時範囲・処理時間を表示します。</p>
 <p>受信内容を確認する場合だけ開始してください。健康情報を含む本文の先頭8 KiBと結果を、最新20件までメモリに保持します。10分後・停止・再起動で消去します。通常ログやバックアップには書き込みません。</p>
 <div class="toolbar"><button type="button" id="health-debug-start">10分間の記録を開始</button><button type="button" id="health-debug-stop" class="secondary">停止・消去</button><button type="button" id="health-debug-refresh" class="secondary">受信状況を更新</button><button type="button" id="health-debug-download" class="secondary">ログをダウンロード</button><button type="button" id="health-debug-clear" class="secondary">ログを消去</button></div>
 <p id="health-debug-status" role="status" aria-live="polite">停止中（パネルを開くと状況を取得します）</p>

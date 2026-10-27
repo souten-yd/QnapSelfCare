@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import time
+
+MAX_SAMPLES = 50000
 
 METRICS = {
     'steps': ('count', 0, 1000000),
@@ -98,14 +101,84 @@ def insert(db, user_id, sample, received_at):
     return 1
 
 
+# Explicit aliases only: unknown units/categories must never be guessed.
+TYPE_NAMES = {'歩数': 'steps', 'ウォーキング＋ランニングの距離': 'walking_running_distance',
+              'アクティブエネルギー': 'active_energy', '心拍数': 'heart_rate',
+              '取り込まれた酸素のレベル': 'oxygen_saturation', '睡眠': 'sleep'}
+UNIT_NAMES = {'歩': 'count', '拍/分': 'bpm', '拍／分': 'bpm',
+              'パーセント': '%', 'キロカロリー': 'kcal'}
+SLEEP_NAMES = {'覚醒': 'awake', 'ベッドにいた時間': 'in_bed', '睡眠': 'asleep_unspecified',
+               'コア': 'core', '深い': 'deep', 'レム': 'rem'}
+
+
+def unpack_groups(body):
+    if set(body) != {'schema', 'user_id', 'groups'} or not isinstance(body['groups'], list):
+        raise ValueError('schema:2, user_id, groupsを指定してください')
+    if len(body['groups']) > 6:
+        raise ValueError('groupsは最大6項目です')
+    total = 0
+    seen = set()
+    for group in body['groups']:
+        if (not isinstance(group, dict) or set(group) != {'type', 'source', 'unit', 'samples'}
+                or not isinstance(group['samples'], list)):
+            raise ValueError('groupにはtype, source, unit, samplesが必要です')
+        name = string(group['type'], 'type')
+        metric = TYPE_NAMES.get(name, name)
+        if metric not in METRICS or metric in seen:
+            raise ValueError('対象外または重複したtypeです')
+        seen.add(metric)
+        string(group['source'], 'source')
+        unit = group['unit']
+        if not isinstance(unit, str):
+            raise ValueError('groupのunitは文字列です（睡眠は空文字）')
+        unit = UNIT_NAMES.get(unit, unit)
+        allowed = {METRICS[metric][0]}
+        allowed.update({'walking_running_distance': {'km'}, 'active_energy': {'kJ'},
+                        'oxygen_saturation': {'fraction'}, 'sleep': {''}}.get(metric, set()))
+        if unit not in allowed:
+            raise ValueError('groupの単位が不正です')
+        total += len(group['samples'])
+        if total > MAX_SAMPLES:
+            raise ValueError('1リクエストは最大50000サンプルです。期間を分けて送信してください')
+    rows = []
+    for gi, group in enumerate(body['groups'], 1):
+        metric = TYPE_NAMES.get(group['type'].strip(), group['type'].strip())
+        for si, row in enumerate(group['samples'], 1):
+            try:
+                if (not isinstance(row, dict) or not {'start', 'end', 'value'} <= set(row)
+                        or set(row) - {'start', 'end', 'value', 'unit', 'source_id', 'device'}):
+                    raise ValueError('start, end, valueと任意のunit/source_id/deviceのみ指定してください')
+                value = row['value']
+                if metric == 'sleep' and isinstance(value, str):
+                    value = SLEEP_NAMES.get(value, value)
+                raw_unit = row.get('unit', group['unit'])
+                if not isinstance(raw_unit, str) or (metric == 'sleep' and raw_unit != ''):
+                    raise ValueError('unitは文字列です（睡眠は空文字）')
+                sample = dict(metric=metric, source=group['source'],
+                              unit=None if metric == 'sleep' else UNIT_NAMES.get(raw_unit, raw_unit),
+                              start_at=row['start'], end_at=row['end'], value=value)
+                sample.update({k: row[k] for k in ('source_id', 'device') if k in row})
+                rows.append(normalize(sample))
+            except ValueError as error:
+                raise ValueError(f'groups[{gi}] samples[{si}]: {error}') from None
+    return rows
+
+
 def ingest(store, body):
-    if (not isinstance(body, dict) or set(body) != {'schema', 'user_id', 'samples'}
-            or type(body['schema']) is not int or body['schema'] != 1):
-        raise ValueError('schema:1, user_id, samplesを指定してください')
-    samples = body['samples']
-    if not isinstance(samples, list) or len(samples) > 1000:
-        raise ValueError('1リクエストは最大1000サンプルです。分割して送信してください')
-    normalized = [normalize(s) for s in samples]
+    started = time.monotonic()
+    if not isinstance(body, dict) or type(body.get('schema')) is not int:
+        raise ValueError('schema:1または2を指定してください')
+    if body['schema'] == 2:
+        normalized = unpack_groups(body)
+    elif body['schema'] == 1:
+        if set(body) != {'schema', 'user_id', 'samples'}:
+            raise ValueError('schema:1, user_id, samplesを指定してください')
+        samples = body['samples']
+        if not isinstance(samples, list) or len(samples) > MAX_SAMPLES:
+            raise ValueError('1リクエストは最大50000サンプルです。期間を分けて送信してください')
+        normalized = [normalize(s) for s in samples]
+    else:
+        raise ValueError('schema:1または2を指定してください')
     received_at = datetime.now(timezone.utc).isoformat(timespec='microseconds')
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -113,7 +186,16 @@ def ingest(store, body):
             raise ValueError('登録済みの利用者を指定してください')
         inserted = sum(insert(db, body['user_id'], s, received_at) for s in normalized)
     # connect() commits before this response can be returned; no RAM-only acknowledgement.
-    return {'inserted': inserted, 'duplicates': len(samples) - inserted, 'received': len(samples)}
+    result = {'inserted': inserted, 'duplicates': len(normalized) - inserted, 'received': len(normalized)}
+    if body['schema'] == 2:
+        counts = {metric: 0 for metric in METRICS}
+        for row in normalized:
+            counts[row['metric']] += 1
+        result.update(counts=counts,
+                      start_at=min((s['start_at'] for s in normalized), default=None),
+                      end_at=max((s['end_at'] for s in normalized), default=None),
+                      processing_ms=round((time.monotonic() - started) * 1000, 2))
+    return result
 
 
 def history(store, user_id, since=None, until=None, limit=200, offset=0):

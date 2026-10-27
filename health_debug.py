@@ -54,7 +54,7 @@ class HealthDebug:
             if not session or session != self.begin():
                 return
             # No arbitrary headers, URLs, query strings, credentials or client IPs.
-            result = {k: response[k] for k in ('inserted', 'duplicates', 'received') if k in response}
+            result = {k: response[k] for k in ('inserted', 'duplicates', 'received', 'counts', 'start_at', 'end_at', 'processing_ms') if k in response}
             if 'error' in response:
                 result['error'] = str(response['error'])[:1000]
             self.entries.append({'received_at': datetime.now(timezone.utc).isoformat(),

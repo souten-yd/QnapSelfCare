@@ -49,7 +49,7 @@ class AppleHealthTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.send([sample(), bad])
             self.assertEqual(ah.history(self.store, self.user)['total'], 0)
-        with self.assertRaises(ValueError): self.send([sample()] * 1001)
+        with self.assertRaises(ValueError): self.send([sample()] * 50001)
         with self.assertRaises(ValueError): self.send([sample()], 'missing')
 
     def test_timezone_precision_source_and_user_identity(self):
@@ -115,5 +115,79 @@ class AppleHealthTests(unittest.TestCase):
         with sqlite3.connect(target) as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM apple_health_samples').fetchone()[0], 1)
 
+
+
+
+
+class ShortcutsGroupsTests(unittest.TestCase):
+    setUp = AppleHealthTests.setUp
+    send = AppleHealthTests.send
+    
+    def grouped(self, rows, kind='心拍数', unit='拍/分'):
+        return dict(schema=2, user_id=self.user, groups=[
+            dict(type=kind, source=sample()['source'], unit=unit, samples=rows)])
+
+    def row(self, **extra):
+        return dict(start=sample()['start_at'], end=sample()['end_at'], value=72, **extra)
+
+    def test_groups_normalize_and_cross_schema_deduplicate(self):
+        body = self.grouped([self.row()])
+        result = ah.ingest(self.store, body)
+        self.assertEqual(result['counts']['heart_rate'], 1)
+        self.assertGreaterEqual(result['processing_ms'], 0)
+        self.assertEqual(self.send([sample()])['duplicates'], 1)
+        cases = [('歩数', '歩', 0, 'count', 0), ('ウォーキング＋ランニングの距離', 'km', .02, 'm', 20),
+                 ('アクティブエネルギー', 'キロカロリー', .01, 'kcal', .01),
+                 ('取り込まれた酸素のレベル', 'fraction', .96, '%', 96),
+                 ('睡眠', '', 'レム', None, 'rem')]
+        for kind, unit, value, normalized_unit, normalized_value in cases:
+            row = self.row(); row['value'] = value
+            ah.ingest(self.store, self.grouped([row], kind, unit))
+        values = ah.history(self.store, self.user)['samples']
+        self.assertIn(('sleep', 'rem', None), [(r['metric'], r['value'], r['unit']) for r in values])
+        self.assertIn(('walking_running_distance', 20, 'm'), [(r['metric'], r['value'], r['unit']) for r in values])
+        row = self.row(unit='m'); row['value'] = 20
+        self.assertEqual(ah.ingest(self.store, self.grouped([row], 'walking_running_distance', 'km'))['duplicates'], 1)
+
+    def test_groups_validation_and_conflict_are_atomic(self):
+        for change in [dict(value='72'), dict(value='72 bpm'), dict(unit='unknown'),
+                       dict(value=True), dict(end='bad')]:
+            bad = self.row(); bad.update(change)
+            with self.assertRaisesRegex(ValueError, r'groups\[1\] samples\[2\]'):
+                ah.ingest(self.store, self.grouped([self.row(), bad]))
+            self.assertEqual(ah.history(self.store, self.user)['total'], 0)
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store, self.grouped([], '体重', 'kg'))
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store, self.grouped([], 'sleep', 'minutes'))
+        row = self.row(source_id='stable')
+        ah.ingest(self.store, self.grouped([row]))
+        bad = dict(row, value=73)
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store, self.grouped([dict(row, source_id='new'), bad]))
+        self.assertEqual(ah.history(self.store, self.user)['total'], 1)
+
+    def test_50000_unique_samples_replay_and_limits(self):
+        from datetime import datetime, timedelta, timezone
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        rows = [dict(start=(start + timedelta(minutes=i)).isoformat(),
+                     end=(start + timedelta(minutes=i+1)).isoformat(), value=72) for i in range(50000)]
+        body = self.grouped(rows)
+        self.assertLess(len(json.dumps(body).encode()), 32 * 1024 * 1024)
+        first = ah.ingest(self.store, body)
+        self.assertEqual(first['inserted'], 50000)
+        self.assertEqual(ah.ingest(self.store, body)['duplicates'], 50000)
+        self.assertEqual(ah.history(Store(self.tmp.name), self.user)['total'], 50000)
+        rows.append(self.row())
+        with self.assertRaises(ValueError): ah.ingest(self.store, body)
+        rows.pop()
+        rows[-1]['value'] = 'invalid'
+        with self.assertRaises(ValueError): ah.ingest(self.store, body)
+        self.assertEqual(ah.history(self.store, self.user)['total'], 50000)
+
+    def test_empty_groups_are_not_completion_proof(self):
+        result = ah.ingest(self.store, self.grouped([]))
+        self.assertEqual(result['received'], 0)
+        self.assertIsNone(result['start_at'])
 
 if __name__ == '__main__': unittest.main()
