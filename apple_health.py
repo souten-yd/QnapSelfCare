@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import re
 import time
 
 MAX_SAMPLES = 50000
@@ -111,6 +112,78 @@ SLEEP_NAMES = {'覚醒': 'awake', 'ベッドにいた時間': 'in_bed', '睡眠'
                'コア': 'core', '深い': 'deep', 'レム': 'rem'}
 
 
+def text_records(value, name, maximum):
+    """Decode only known container positions; bounded JSON/JSON-lines, never eval."""
+    for _ in range(4):
+        if not isinstance(value, str):
+            break
+        text = value.strip()
+        if not text:
+            raise ValueError(name + 'が空文字です。データなしの場合は空配列を送ってください')
+        try:
+            value = json.loads(text)
+            continue
+        except (ValueError, RecursionError):
+            pass
+        # Shortcuts may join serialized dictionaries using real or literal newlines.
+        decoder = json.JSONDecoder()
+        rows = []
+        while text:
+            try:
+                row, end = decoder.raw_decode(text)
+            except (ValueError, RecursionError):
+                raise ValueError(name + 'はJSON辞書またはJSON辞書の行一覧で送ってください') from None
+            if not isinstance(row, dict):
+                raise ValueError(name + 'に日時・項目情報がありません。数値だけでは復元できません')
+            rows.append(row)
+            if len(rows) > maximum:
+                raise ValueError(name + 'の件数上限を超えています')
+            rest = text[end:]
+            if rest and not rest[0].isspace() and not rest.startswith('\\n'):
+                raise ValueError(name + 'のレコード間には改行が必要です')
+            text = rest.lstrip()
+            if text.startswith('\\n'):
+                text = text[2:].lstrip()
+        value = rows
+        break
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError(name + 'に日時・項目情報がありません。数値だけでは復元できません')
+    if len(value) > maximum:
+        raise ValueError(name + 'の件数上限を超えています')
+    result = []
+    for row in value:
+        for _ in range(4):
+            if not isinstance(row, str):
+                break
+            try:
+                row = json.loads(row)
+            except (ValueError, RecursionError):
+                raise ValueError(name + 'の各要素はJSON辞書で送ってください') from None
+        if not isinstance(row, dict):
+            raise ValueError(name + 'の各要素には辞書が必要です。数値だけでは日時を復元できません')
+        result.append(row)
+    return result
+
+
+def shortcuts_body(body):
+    if set(body) != {'schema', 'user_id', 'groups'}:
+        raise ValueError('schema:2, user_id, groupsを指定してください')
+    groups = []
+    total = 0
+    for group in text_records(body['groups'], 'groups', 6):
+        group = dict(group)
+        if 'samples' not in group:
+            raise ValueError('groupにはtype, source, unit, samplesが必要です')
+        group['samples'] = text_records(group['samples'], 'samples', MAX_SAMPLES)
+        total += len(group['samples'])
+        if total > MAX_SAMPLES:
+            raise ValueError('1リクエストは最大50000サンプルです')
+        groups.append(group)
+    return dict(body, groups=groups)
+
+
 def unpack_groups(body):
     if set(body) != {'schema', 'user_id', 'groups'} or not isinstance(body['groups'], list):
         raise ValueError('schema:2, user_id, groupsを指定してください')
@@ -151,6 +224,11 @@ def unpack_groups(body):
                 value = row['value']
                 if metric == 'sleep' and isinstance(value, str):
                     value = SLEEP_NAMES.get(value, value)
+                if metric != 'sleep' and isinstance(value, str):
+                    # Numeric text only. No unit stripping, locale guessing or NaN/Infinity.
+                    if not re.fullmatch(r'-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?', value.strip()):
+                        raise ValueError('数値文字列が不正です。単位はunitに指定してください')
+                    value = float(value.strip())
                 raw_unit = row.get('unit', group['unit'])
                 if not isinstance(raw_unit, str) or (metric == 'sleep' and raw_unit != ''):
                     raise ValueError('unitは文字列です（睡眠は空文字）')
@@ -169,7 +247,7 @@ def ingest(store, body):
     if not isinstance(body, dict) or type(body.get('schema')) is not int:
         raise ValueError('schema:1または2を指定してください')
     if body['schema'] == 2:
-        normalized = unpack_groups(body)
+        normalized = unpack_groups(shortcuts_body(body))
     elif body['schema'] == 1:
         if set(body) != {'schema', 'user_id', 'samples'}:
             raise ValueError('schema:1, user_id, samplesを指定してください')
