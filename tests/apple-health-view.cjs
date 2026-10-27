@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {JSDOM}=require('jsdom');
+const {summarize,union}=require('../web/apple-health-view.js');
+const a=Date.parse('2026-10-28T00:00:00+09:00'),b=a+86400000;
+const row=(metric,value,start=a,end=a+60000)=>({metric,value,start_at:new Date(start).toISOString(),end_at:new Date(end).toISOString(),source:'unknown'});
+assert.equal(union([[1,3],[2,5],[7,8]]),5);
+const stats=summarize([row('sleep','core',a-3600000,a+3600000),row('sleep','rem',a,a+7200000),row('sleep','in_bed',a,b),row('steps',12),row('steps',99,a-60000,a+60000),row('walking_running_distance',1000)],a,b);
+assert.equal(stats.sleep.value,'2時間0分');assert.equal(stats.steps.value,'12 歩');assert.equal(stats.walking_running_distance.value,'1 km');assert.equal(stats.heart_rate.value,'—');
+(async()=>{
+ const dom=new JSDOM(fs.readFileSync('web/index.html','utf8'),{runScripts:'outside-only',url:'http://localhost'});
+ const w=dom.window;const calls=[];const date=new Date();date.setHours(0,0,0,0);const start=+date;
+ const samples=Array.from({length:1001},(_,i)=>row('heart_rate',60+i%5,start+i*60000,start+i*60000+1000));
+ w.fetch=async url=>{calls.push(url);if(url==='/api/users')return {ok:true,json:async()=>[{id:'u',name:'Test'}]};const offset=Number(new URL(url,'http://localhost').searchParams.get('offset'));return {ok:true,json:async()=>({total:1001,samples:samples.slice(offset,offset+1000)})};};
+ w.eval(fs.readFileSync('web/apple-health-view.js','utf8'));
+ for(let i=0;i<15;i++)await new Promise(r=>setImmediate(r));
+ assert.equal(w.document.querySelectorAll('#ah-cards > article').length,6);
+ assert.ok(calls.some(s=>s.includes('offset=1000')));
+ assert.match(w.document.getElementById('ah-status').textContent,/1001件/);
+ w.fetch=async()=>({ok:false,json:async()=>({error:'失敗'})});
+ w.document.getElementById('ah-refresh').click();
+ for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));
+ assert.equal(w.document.getElementById('ah-cards').children.length,0);
+ assert.equal(w.document.getElementById('ah-status').textContent,'失敗');
+ dom.window.close();console.log('Apple Health view tests passed');
+})().catch(e=>{console.error(e);process.exitCode=1;});

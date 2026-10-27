@@ -192,3 +192,5 @@ th,td{padding:12px}.records-intro p{flex:1;margin:0}.records-intro{margin-bottom
 .chart-cursor-value{border-left:3px solid var(--chart-primary);padding-left:6px;white-space:nowrap}
 button.chart-cursor-close{margin-left:auto;padding:1px 8px;min-width:30px;min-height:30px;line-height:1.2}
 @media(max-width:700px){.chart-cursor-readout{padding:7px;gap:5px}.chart-cursor-value{white-space:normal}}
+
+.ah-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px}.ah-grid .card{min-width:0;margin:0}.ah-grid strong{font-size:1.5rem}.ah-plot svg{display:block;width:100%;height:auto}.ah-grid details p{overflow-wrap:anywhere;font-size:.85rem}
