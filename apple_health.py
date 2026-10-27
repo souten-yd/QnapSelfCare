@@ -112,6 +112,17 @@ SLEEP_NAMES = {'覚醒': 'awake', 'ベッドにいた時間': 'in_bed', '睡眠'
                'コア': 'core', '深い': 'deep', 'レム': 'rem'}
 
 
+def sample_text_record(text):
+    """Allow exactly one accidental extra brace pair around a sample object."""
+    decoder = json.JSONDecoder()
+    if text.startswith('{{'):
+        row, end = decoder.raw_decode(text, 1)
+        if not isinstance(row, dict) or text[end:end + 1] != '}':
+            raise ValueError('samplesの二重括弧が不正です')
+        return row, end + 1
+    return decoder.raw_decode(text)
+
+
 def text_records(value, name, maximum):
     """Decode only known container positions; bounded JSON/JSON-lines, never eval."""
     for _ in range(4):
@@ -130,7 +141,8 @@ def text_records(value, name, maximum):
         rows = []
         while text:
             try:
-                row, end = decoder.raw_decode(text)
+                row, end = (sample_text_record(text) if name == 'samples'
+                            else decoder.raw_decode(text))
             except (ValueError, RecursionError):
                 raise ValueError(name + 'はJSON辞書またはJSON辞書の行一覧で送ってください') from None
             if not isinstance(row, dict):
@@ -158,7 +170,13 @@ def text_records(value, name, maximum):
             if not isinstance(row, str):
                 break
             try:
-                row = json.loads(row)
+                if name == 'samples' and row.strip().startswith('{{'):
+                    text = row.strip()
+                    row, end = sample_text_record(text)
+                    if text[end:].strip():
+                        raise ValueError('samplesの末尾が不正です')
+                else:
+                    row = json.loads(row)
             except (ValueError, RecursionError):
                 raise ValueError(name + 'の各要素はJSON辞書で送ってください') from None
         if not isinstance(row, dict):

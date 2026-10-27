@@ -199,6 +199,32 @@ class ShortcutsGroupsTests(unittest.TestCase):
         self.assertEqual(ah.ingest(self.store, body)['duplicates'], 1)
         self.assertEqual(self.send([sample()])['duplicates'], 1)
 
+    def test_extra_sample_braces_preserve_values_and_replay(self):
+        row = dict(self.row(), value='72', device='literal {{braces}}')
+        wrapped = '{' + json.dumps(row) + '}'
+        group = self.grouped([])['groups'][0]
+        for payload in (wrapped, wrapped + '\n' + wrapped,
+                        wrapped + r'\n' + wrapped, [wrapped]):
+            group['samples'] = payload
+            result = ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=group))
+            self.assertEqual(result['received'], 2 if isinstance(payload, str) and payload.count('start') == 2 else 1)
+        saved = ah.history(self.store, self.user)['samples']
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['device'], row['device'])
+        self.assertEqual(saved[0]['value'], 72)
+        self.assertEqual(saved[0]['start_at'], ah.instant(row['start']))
+        self.assertEqual(saved[0]['end_at'], ah.instant(row['end']))
+
+    def test_malformed_extra_braces_are_atomic(self):
+        valid = '{' + json.dumps(self.row()) + '}'
+        for bad in (valid[:-1], valid + '}', '{' + valid + '}',
+                    valid + 'garbage', '{{"value":"72"}}'):
+            group = self.grouped([])['groups'][0]
+            group['samples'] = valid + '\n' + bad
+            with self.assertRaises(ValueError):
+                ah.ingest(self.store, dict(schema=2, user_id=self.user, groups=group))
+            self.assertEqual(ah.history(self.store, self.user)['total'], 0)
+
     def test_shortcuts_missing_time_and_ambiguous_text_rejected(self):
         for value in ('70\n72\n69', '', '[70,72]', '"70"', 'null'):
             with self.assertRaises(ValueError):
