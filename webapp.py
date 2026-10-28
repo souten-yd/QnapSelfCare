@@ -106,6 +106,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
                   "/chart-cursor.js": ("chart-cursor.js", "text/javascript; charset=utf-8"),
                   "/apple-health-view.js": ("apple-health-view.js", "text/javascript; charset=utf-8"),
+                  "/home.js": ("home.js", "text/javascript; charset=utf-8"),
                   "/health-debug.js": ("health-debug.js", "text/javascript; charset=utf-8"),
                   "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                   "/migration.js": ("migration.js", "text/javascript; charset=utf-8"),

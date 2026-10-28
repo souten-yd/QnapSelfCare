@@ -1,5 +1,5 @@
 'use strict';
-const WELLNESS_FIELDS=['height_cm','age','sex','goal_weight_kg','goal_date','bp_sys_low','bp_sys_high','bp_dia_low','bp_dia_high','bmi_low','bmi_high','plan_text'];
+const WELLNESS_FIELDS=['height_cm','age','sex','goal_weight_kg','goal_date','bp_sys_low','bp_sys_high','bp_dia_low','bp_dia_high','bmi_low','bmi_high','plan_text','step_goal'];
 async function refreshWellness(){
  const userId=$('current-user').value;
  $('wellness-empty').hidden=!!userId;$('wellness-content').hidden=!userId;
@@ -22,7 +22,7 @@ async function refreshWellness(){
 }
 $('wellness-form').addEventListener('submit',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');const f=$('wellness-form'),profile={};
- for(const key of WELLNESS_FIELDS){const v=f.elements[key].value;profile[key]=['height_cm','age','goal_weight_kg'].includes(key)?(v?Number(v):null):key.startsWith('bp_')||key.startsWith('bmi_')?Number(v):v;}
+ for(const key of WELLNESS_FIELDS){const v=f.elements[key].value;profile[key]=['height_cm','age','goal_weight_kg'].includes(key)?(v?Number(v):null):key.startsWith('bp_')||key.startsWith('bmi_')||key==='step_goal'?Number(v):v;}
  await api('/api/wellness/profile',{user_id,profile});await refreshWellness();message('健康設定と計画を保存しました');
 }));
 $('meal-form').addEventListener('submit',guarded(async()=>{
