@@ -29,7 +29,7 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testRefreshProposals=refreshProposals;');
+ w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testRefreshProposals=refreshProposals;window.__testRefreshAiActivity=refreshAiActivity;window.__testAiProgressText=aiProgressText;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -260,6 +260,18 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
   await until(()=>applied.length===1);
   assert.equal(confirms,1);assert.deepEqual({...applied[0],user_id:undefined},{user_id:undefined,proposal_id:7,option:'B'});
   w.fetch=before;w.confirm=confirmBefore;}
+ {const before=w.fetch;let cancelled=0;
+  w.fetch=(url,init)=>url==='/api/ai/activity'?jsonResponse({busy:true,waiting_interactive:1,deadline_seconds:2700,stall_after_seconds:180,
+    current:{label:'毎日のアドバイス（けんしろう・10/27分）',interactive:false,provider:'qnapassistant',stage:'loading_model',detail:'空きRAM 3.2 GiB',elapsed_seconds:1029,since_update_seconds:250,errors:2,stalled:true}})
+   :url==='/api/ai/activity/cancel'?(cancelled++,jsonResponse({busy:false})):before(url,init);
+  await w.__testRefreshAiActivity();
+  const act=d.getElementById('ai-activity').textContent;
+  assert.match(act,/毎日のアドバイス（けんしろう・10\/27分）（自動）/);assert.match(act,/モデルを読み込み中（17分9秒経過）/);
+  assert.match(act,/4分10秒前（通信エラー 2回・再試行中）/);assert.match(act,/応答がありません/);assert.match(act,/約28分/);assert.match(act,/画面からの依頼 1件/);
+  assert.equal(d.getElementById('ai-activity-cancel').hidden,false);
+  d.getElementById('ai-activity-cancel').click();await until(()=>cancelled===1);
+  assert.match(w.__testAiProgressText({stage:'waiting',elapsed_seconds:65,blocking:{label:'毎日のアドバイス（けんしろう・10/27分）',stage:'generating',elapsed_seconds:600,stalled:false}}),/「毎日のアドバイス（けんしろう・10\/27分）」の完了を待っています（その処理は回答を生成中・10分0秒経過）。待ち時間 1分5秒/);
+  w.fetch=before;}
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');
  await until(()=>d.getElementById('plan-history').textContent.includes('活動量に合わせ延長'));
  assert.match(d.getElementById('plan-history').textContent,/2027-03-01/);

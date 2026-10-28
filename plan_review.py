@@ -174,7 +174,7 @@ class PlanReviewer:
         pending = next((r for r in rows if r['status'] == 'pending'), None)
         return {'pending': pending, 'history': rows, 'has_plan': current is not None}
 
-    def review(self, user_id, trigger='manual', allow_ai=True, cancelled=None, poll=3):
+    def review(self, user_id, trigger='manual', allow_ai=True, cancelled=None, poll=3, label='減量計画の点検', interactive=True):
         """Create a proposal if the plan needs one. Returns the new proposal, or None when on track."""
         today = energy.today()
         report = self.store.energy_report(user_id)
@@ -209,7 +209,7 @@ class PlanReviewer:
                         '案を選ぶ前に確認したいことを簡潔に説明してください。案にない数値の計画は作らないでください。')
             try:
                 answer = self.coach.ask(user_id, 'review', question, extra={'plan_review': {'reasons': reasons, 'options': summary}},
-                                        cancelled=cancelled, poll=poll)['answer']
+                                        cancelled=cancelled, poll=poll, label=label, interactive=interactive)['answer']
                 match = re.search(r'推奨\s*[:：]\s*案?\s*([ABC])', answer)
                 if match and any(o['id'] == match.group(1) for o in options):
                     recommended, by = match.group(1), 'ai'

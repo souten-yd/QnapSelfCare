@@ -481,3 +481,9 @@ details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
 .proposal-option button{margin-top:auto}
 .proposal-option .notice{margin:4px 0;padding:8px 10px;font-size:12px}
 .proposal-card .list-title{margin-top:14px}
+/* ---- AIの稼働状況 ---- */
+.ai-activity-list{grid-template-columns:11em 1fr;gap:4px 12px;font-size:13px;margin:0 0 8px}
+.ai-activity-list dt{color:var(--muted)}
+.ai-activity-list dd{font-weight:600}
+.ai-activity-idle{margin:0;color:var(--good)}
+@media(max-width:700px){.ai-activity-list{grid-template-columns:1fr}.ai-activity-list dd{margin-bottom:4px}}

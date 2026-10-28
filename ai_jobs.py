@@ -11,7 +11,8 @@ import time
 
 KINDS = {'consult': {'user_id', 'mode', 'question', 'history'}, 'meal': {'meals'}, 'test': set()}
 REQUIRED = {'consult': {'user_id', 'mode', 'question'}, 'meal': {'meals'}, 'test': set()}
-STAGES = {'waiting': '前の処理の完了を待っています', 'queued': 'AIの順番待ち', 'loading_model': 'モデルを読み込み中',
+LABELS = {'consult': 'AI相談', 'meal': '食事の試算', 'test': '接続テスト'}
+STAGES = {'waiting': '前の処理の完了を待っています', 'cancelling': '中止しています', 'queued': 'AIの順番待ち', 'loading_model': 'モデルを読み込み中',
           'ready': '推論の準備完了', 'generating': '回答を生成中'}
 KEEP_SECONDS = 30 * 60
 MAX_PENDING = 5
@@ -43,7 +44,7 @@ class AIJobs:
             now = self.clock()
             self._jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'queued', 'stage': 'queued', 'created': now,
                                   'started': None, 'finished': None, 'error': None, 'result': None, 'detail': None,
-                                  'cancel': False, 'params': params}
+                                  'cancel': False, 'params': params, 'blocking': None}
         self._ensure_worker()
         self._queue.put(job_id)
         return self.status(job_id)
@@ -57,7 +58,7 @@ class AIJobs:
             end = job['finished'] or now
             return {'id': job['id'], 'kind': job['kind'], 'state': job['state'], 'stage': job['stage'],
                     'stage_label': STAGES.get(job['stage'], ''), 'elapsed_seconds': int(end - job['created']),
-                    'detail': job['detail'], 'error': job['error'], 'result': job['result']}
+                    'detail': job['detail'], 'error': job['error'], 'result': job['result'], 'blocking': job['blocking']}
 
     def cancel(self, job_id):
         with self._lock:
@@ -96,6 +97,8 @@ class AIJobs:
         def progress(state):
             with self._lock:
                 job['stage'] = state.get('status') or job['stage']
+                blocking = state.get('blocking') if job['stage'] == 'waiting' else None
+                job['blocking'] = {k: blocking.get(k) for k in ('label', 'stage', 'elapsed_seconds', 'since_update_seconds', 'stalled')} if blocking else None
                 parts = []
                 if state.get('memory_available_bytes'):
                     parts.append(f"空きRAM {state['memory_available_bytes'] / 1073741824:.1f} GiB")
@@ -107,10 +110,10 @@ class AIJobs:
             p, coach = job['params'], self.coach
             if job['kind'] == 'consult':
                 result = coach.ask(p['user_id'], p['mode'], p['question'], history=p.get('history'),
-                                   progress=progress, cancelled=cancelled)
+                                   progress=progress, cancelled=cancelled, label=LABELS['consult'])
             else:
                 config, prompt = coach._meal_payload(p['meals']) if job['kind'] == 'meal' else coach._test_payload()
-                result = coach.run_prompt(config, prompt, progress, cancelled)
+                result = coach.run_prompt(config, prompt, progress, cancelled, label=LABELS[job['kind']])
             outcome = {'state': 'cancelled'} if job['cancel'] else {'state': 'completed', 'result': result}
         except ValueError as error:
             outcome = {'state': 'cancelled' if job['cancel'] else 'failed', 'error': str(error)}

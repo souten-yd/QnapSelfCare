@@ -13,10 +13,15 @@ class FakeCoach:
         self.config = {'provider': provider, 'base_url': base_url, 'model': 'auto'}
         self.calls, self.fail = [], None
 
+    waiting = 0
+
     def settings(self):
         return dict(self.config)
 
-    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3):
+    def interactive_waiting(self):
+        return self.waiting
+
+    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3, **kwargs):
         self.calls.append(('ask', mode, extra))
         if self.fail:
             raise ValueError(self.fail)
@@ -121,7 +126,7 @@ class DailyAdviceTests(unittest.TestCase):
     def test_schedule_also_checks_the_plan_but_manual_advice_does_not(self):
         calls = []
         class Reviewer:
-            def review(self, user_id, trigger, allow_ai=True, cancelled=None, poll=3):
+            def review(self, user_id, trigger, allow_ai=True, cancelled=None, poll=3, **kwargs):
                 calls.append((trigger, allow_ai))
         self.advisor.reviewer = Reviewer()
         self.add_day(date(2026, 10, 27))
@@ -134,6 +139,26 @@ class DailyAdviceTests(unittest.TestCase):
         self.coach.config['provider'] = 'openrouter'           # external: plan check runs without AI
         self.advisor.run(self.user, date(2026, 10, 25), 'schedule')
         self.assertEqual(calls[-1], ('schedule', False))
+
+    def test_catch_up_only_within_window_and_yield_to_screen_requests(self):
+        self.add_day(date(2026, 10, 27))
+        self.now = self.now.replace(hour=19, minute=10)                # e.g. right after an update in the evening
+        rows = self.advisor.tick()
+        self.assertEqual(rows, [])
+        missed = self.advisor._get(self.user, '2026-10-27')
+        self.assertEqual(missed['status'], 'missed')
+        self.assertIn('手動で作成できます', missed['error'])
+        self.assertEqual(self.coach.calls, [])
+        self.assertEqual(self.advisor.tick(), [])                     # not retried
+        self.advisor.run(self.user, date(2026, 10, 27), 'manual')      # manual creation still works
+        self.assertEqual(self.advisor._get(self.user, '2026-10-27')['status'], 'done')
+        # within the window it runs, but waits while a screen request is queued
+        self.now = datetime(2026, 10, 29, 3, 30, tzinfo=JST)
+        self.add_day(date(2026, 10, 28))
+        self.coach.waiting = 1
+        self.assertEqual(self.advisor.tick(), [])
+        self.coach.waiting = 0
+        self.assertEqual(self.advisor.tick()[0]['day'], '2026-10-28')
 
     def test_restart_marks_running_rows_failed(self):
         self.add_day(date(2026, 10, 27))

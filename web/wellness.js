@@ -76,9 +76,13 @@ renderCoachPresets();
 // ---- Background AI jobs ----
 // Every AI request runs as a SelfCare job; the browser only polls its state, so slow NAS models
 // (QnapAssistant loading and generating for many minutes) never hit an HTTP time limit.
-const AI_STAGE={waiting:'前の処理の完了を待っています',queued:'AIの順番待ち',loading_model:'モデルを読み込み中',ready:'推論の準備完了',generating:'回答を生成中'};
+const AI_STAGE={cancelling:'中止しています',waiting:'前の処理の完了を待っています',queued:'AIの順番待ち',loading_model:'モデルを読み込み中',ready:'推論の準備完了',generating:'回答を生成中'};
 const aiSleep=ms=>new Promise(r=>setTimeout(r,ms));
-function aiProgressText(s){const m=Math.floor(s.elapsed_seconds/60),sec=s.elapsed_seconds%60;return `${AI_STAGE[s.stage]||'処理中'}（経過 ${m?m+'分':''}${sec}秒）${s.detail?'・'+s.detail:''}`;}
+function aiDuration(sec){sec=Math.max(0,sec|0);const m=Math.floor(sec/60);return m?`${m}分${sec%60}秒`:`${sec}秒`;}
+function aiProgressText(s){
+ const b=s.blocking;
+ if(s.stage==='waiting'&&b)return `順番待ち：「${b.label}」の完了を待っています（その処理は${AI_STAGE[b.stage]||b.stage}・${aiDuration(b.elapsed_seconds)}経過${b.stalled?'・QnapAssistantの応答なし':''}）。待ち時間 ${aiDuration(s.elapsed_seconds)}。「AIの稼働状況」で中止できます`;
+ return `${AI_STAGE[s.stage]||'処理中'}（経過 ${aiDuration(s.elapsed_seconds)}）${s.detail?'・'+s.detail:''}`;}
 async function waitAiJob(id,onProgress){
  let failures=0;
  for(;;){
@@ -151,7 +155,7 @@ async function refreshIndicators(userId){
  }
 }
 // ---- 毎日のアドバイス ----
-const ADVICE_STATUS={done:'作成済み',running:'作成中…',retry:'AIが混雑していたため、少し後に再試行します',failed:'作成できませんでした',skipped:'記録がないため作成していません',review_only:'記録の比較のみ（AIなし）'};
+const ADVICE_STATUS={missed:'予定時刻を大きく過ぎたため自動作成を見送り',done:'作成済み',running:'作成中…',retry:'AIが混雑していたため、少し後に再試行します',failed:'作成できませんでした',skipped:'記録がないため作成していません',review_only:'記録の比較のみ（AIなし）'};
 let advicePoll=null;
 function adviceDay(day){const d=new Date(day+'T12:00:00');return `${d.getMonth()+1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）`;}
 function renderReview(review){
@@ -367,3 +371,35 @@ async function refreshProposals(userId=$('current-user').value){
  if(proposalPoll)clearTimeout(proposalPoll);proposalPoll=data.checking?setTimeout(()=>refreshProposals(userId).catch(()=>{}),5000):null;
 }
 $('plan-check').addEventListener('click',guarded(async()=>{const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');await api('/api/wellness/plan-proposals/check',{user_id});message('計画の点検を開始しました。見直しが必要な場合だけ修正案を表示します');await refreshProposals(user_id);}));
+
+// ---- AIの稼働状況: what holds the single AI slot, whether QnapAssistant is still answering ----
+let aiActivityTimer=null;
+async function refreshAiActivity(){
+ const a=await api('/api/ai/activity');const box=$('ai-activity');box.replaceChildren();
+ $('ai-activity-updated').textContent=new Date().toLocaleTimeString('ja-JP')+' 確認';
+ if(!a.busy){box.append(element('p','待機中：実行中のAI処理はありません。','ai-activity-idle'));}
+ else{const c=a.current,dl=element('dl',undefined,'ai-activity-list');
+  const rows=[['実行中',c.label+(c.interactive?'':'（自動）')],['段階',`${AI_STAGE[c.stage]||c.stage}（${aiDuration(c.elapsed_seconds)}経過）`]];
+  if(c.provider==='qnapassistant'){rows.push(['QnapAssistantの最終応答',`${aiDuration(c.since_update_seconds)}前${c.errors?`（通信エラー ${c.errors}回・再試行中）`:''}`]);
+   rows.push(['自動打ち切りまで',`約${Math.max(0,Math.ceil((a.deadline_seconds-c.elapsed_seconds)/60))}分`]);}
+  if(c.detail)rows.push(['NAS',c.detail]);
+  if(a.waiting_interactive)rows.push(['順番待ち',`画面からの依頼 ${a.waiting_interactive}件（実行中の処理が終わると次に実行します。夜間の自動処理より優先）`]);
+  rows.forEach(([k,v])=>dl.append(element('dt',k),element('dd',v)));box.append(dl);
+  if(c.stalled)box.append(element('p',`QnapAssistantから${aiDuration(c.since_update_seconds)}応答がありません。NASやQnapAssistantが止まっている可能性があります。待ち続けても開始から${a.deadline_seconds/60}分で自動的に打ち切ります。すぐ止める場合は「実行中の処理を中止」を押してください。`,'notice error'));
+  else if(c.provider==='qnapassistant')box.append(element('p','QnapAssistantは応答を続けています。処理は進行中です（止まっている場合は「最終応答」の時間が増え続け、3分を超えると警告を表示します）。','muted'));}
+ $('ai-activity-cancel').hidden=!a.busy||a.current?.stage==='cancelling';
+ return a;
+}
+function scheduleAiActivity(){
+ if(aiActivityTimer)clearTimeout(aiActivityTimer);
+ const panel=document.querySelector('[data-panel="coach"]');
+ if(document.hidden||!panel||panel.hidden||$('wellness').hidden){aiActivityTimer=setTimeout(scheduleAiActivity,5000);return;}
+ refreshAiActivity().catch(()=>{}).finally(()=>{aiActivityTimer=setTimeout(scheduleAiActivity,5000);});
+}
+$('ai-activity-cancel').addEventListener('click',guarded(async()=>{
+ const a=await api('/api/ai/activity');if(!a.busy)return refreshAiActivity();
+ if(!confirm(`実行中の「${a.current.label}」を中止しますか？\nQnapAssistant側の処理も取り消します。`))return;
+ await api('/api/ai/activity/cancel',{});message('AI処理の中止を依頼しました');await refreshAiActivity();
+ const user=$('current-user').value;if(user)refreshAdvice(user).catch(()=>{});
+}));
+scheduleAiActivity();
