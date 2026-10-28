@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.52 >/dev/null 2>&1; then
-            echo 'Release v0.3.52 already exists; leaving it unchanged.'
+          if gh release view v0.3.53 >/dev/null 2>&1; then
+            echo 'Release v0.3.53 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.52 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.52' \
-            --notes 'Move the AI status panel (running task, stage, last QnapAssistant answer, cancel) to the Settings page AI tab, next to the AI settings. The daily advice card links there.' \
+          gh release create v0.3.53 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.53' \
+            --notes 'Wait up to 2 hours for QnapAssistant (was 45 minutes), to match a QnapAssistant generation timeout of 3600 seconds plus model loading. Screen requests also wait up to 2 hours for the AI to become free.' \
             --target "$GITHUB_SHA"
 

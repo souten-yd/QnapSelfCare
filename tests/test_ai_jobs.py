@@ -59,7 +59,7 @@ class AssistantRunTests(unittest.TestCase):
 
     def test_deadline_failure_and_cancel_send_delete(self):
         with patch.object(wellness_ai, 'ASSISTANT_DEADLINE_SECONDS', -1), self.fake(['generating']):
-            with self.assertRaisesRegex(ValueError, '45分'):
+            with self.assertRaisesRegex(ValueError, '分以内に完了しませんでした'):
                 self.coach.ask(self.user, 'health', 'q')
         self.assertIn('DELETE', [c[0] for c in self.calls])
         with self.fake(['timed_out']):

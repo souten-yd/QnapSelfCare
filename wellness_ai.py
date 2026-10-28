@@ -39,8 +39,8 @@ SYSTEM_PROMPT = (
     '「## 要点」（2〜3行）、「## 根拠になったデータ」（箇条書き、数値つき）、「## 提案」（すぐ試せる行動を最大3つ）、「## 注意」（必要な場合のみ）。'
 )
 MAX_HISTORY = 3
-ASSISTANT_DEADLINE_SECONDS = 45 * 60   # QnapAssistant defaults: load 600 s + generation 1800 s
-INTERACTIVE_WAIT_SECONDS = 60 * 60     # a request from the screen gives up after waiting this long for the AI slot
+ASSISTANT_DEADLINE_SECONDS = 120 * 60  # long enough for QnapAssistant model load + generation up to 3600 s
+INTERACTIVE_WAIT_SECONDS = 120 * 60    # a request from the screen gives up after waiting this long for the AI slot
 STALL_SECONDS = 180                    # no successful QnapAssistant status for this long is shown as a warning
 
 
@@ -424,7 +424,7 @@ class Coach:
                 raise ValueError('キャンセルしました')
             if time.monotonic() > deadline:
                 self._cancel_quietly(url)
-                raise ValueError('QnapAssistantの処理が45分以内に完了しませんでした。モデル設定とNASの空きメモリを確認してください')
+                raise ValueError(f'QnapAssistantの処理が{ASSISTANT_DEADLINE_SECONDS // 60}分以内に完了しませんでした。モデル設定とNASの空きメモリを確認してください')
             self._sleep(poll)
             try:
                 state = self._assistant_job_request(url)

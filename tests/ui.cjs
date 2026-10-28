@@ -263,13 +263,13 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
   assert.equal(confirms,1);assert.deepEqual({...applied[0],user_id:undefined},{user_id:undefined,proposal_id:7,option:'B'});
   w.fetch=before;w.confirm=confirmBefore;}
  {const before=w.fetch;let cancelled=0;
-  w.fetch=(url,init)=>url==='/api/ai/activity'?jsonResponse({busy:true,waiting_interactive:1,deadline_seconds:2700,stall_after_seconds:180,
+  w.fetch=(url,init)=>url==='/api/ai/activity'?jsonResponse({busy:true,waiting_interactive:1,deadline_seconds:7200,stall_after_seconds:180,
     current:{label:'毎日のアドバイス（けんしろう・10/27分）',interactive:false,provider:'qnapassistant',stage:'loading_model',detail:'空きRAM 3.2 GiB',elapsed_seconds:1029,since_update_seconds:250,errors:2,stalled:true}})
    :url==='/api/ai/activity/cancel'?(cancelled++,jsonResponse({busy:false})):before(url,init);
   await w.__testRefreshAiActivity();
   const act=d.getElementById('ai-activity').textContent;
   assert.match(act,/毎日のアドバイス（けんしろう・10\/27分）（自動）/);assert.match(act,/モデルを読み込み中（17分9秒経過）/);
-  assert.match(act,/4分10秒前（通信エラー 2回・再試行中）/);assert.match(act,/応答がありません/);assert.match(act,/約28分/);assert.match(act,/画面からの依頼 1件/);
+  assert.match(act,/4分10秒前（通信エラー 2回・再試行中）/);assert.match(act,/応答がありません/);assert.match(act,/約103分/);assert.match(act,/画面からの依頼 1件/);
   assert.equal(d.getElementById('ai-activity-cancel').hidden,false);
   d.getElementById('ai-activity-cancel').click();await until(()=>cancelled===1);
   assert.match(w.__testAiProgressText({stage:'waiting',elapsed_seconds:65,blocking:{label:'毎日のアドバイス（けんしろう・10/27分）',stage:'generating',elapsed_seconds:600,stalled:false}}),/「毎日のアドバイス（けんしろう・10\/27分）」の完了を待っています（その処理は回答を生成中・10分0秒経過）。待ち時間 1分5秒/);
