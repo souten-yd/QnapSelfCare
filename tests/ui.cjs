@@ -158,6 +158,7 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  assert.equal((await (await fetch(base+'/api/ai/daily-settings')).json()).time,'05:15');
  assert.match(d.getElementById('advice-latest').textContent,/まだアドバイスはありません/);
  assert(d.getElementById('ai-settings').closest('#settings [data-panel="ai"]'));
+ assert(d.getElementById('ai-activity-card').closest('#settings [data-panel="ai"]'));
  assert.deepEqual([...d.querySelectorAll('.sidebar nav [data-page]')].map(b=>b.dataset.page),['overview','wellness','records','devices','settings']);
  d.querySelector('[data-tabs="wellness"] [data-tab="today"]').click();
  const wellbeing=d.getElementById('wellness-form');wellbeing.elements.height_cm.value='180';wellbeing.elements.age.value='40';wellbeing.elements.sex.value='male';submit('wellness-form');

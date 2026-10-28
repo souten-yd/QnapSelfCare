@@ -392,8 +392,8 @@ async function refreshAiActivity(){
 }
 function scheduleAiActivity(){
  if(aiActivityTimer)clearTimeout(aiActivityTimer);
- const panel=document.querySelector('[data-panel="coach"]');
- if(document.hidden||!panel||panel.hidden||$('wellness').hidden){aiActivityTimer=setTimeout(scheduleAiActivity,5000);return;}
+ const panel=document.querySelector('#settings [data-panel="ai"]');
+ if(document.hidden||!panel||panel.hidden||$('settings').hidden){aiActivityTimer=setTimeout(scheduleAiActivity,1000);return;} // cheap check: shows within 1 s of opening the tab
  refreshAiActivity().catch(()=>{}).finally(()=>{aiActivityTimer=setTimeout(scheduleAiActivity,5000);});
 }
 $('ai-activity-cancel').addEventListener('click',guarded(async()=>{
