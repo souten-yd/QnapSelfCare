@@ -56,7 +56,9 @@ class AdviceDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('秘密',json.dumps(entry))
         raw=self.advisor.raw_diagnostics(self.user,'2026-10-27')
         self.assertEqual(raw['raw_output'],'途中生成した秘密の健康情報')
-        self.assertNotIn('raw_output',json.dumps(self.advisor.history(self.user)))
+        persisted = self.advisor.history(self.user)['latest']['diagnostics']
+        self.assertNotIn('raw_output', persisted)  # availability flag is intentionally allowed
+        self.assertTrue(persisted['raw_output_available'])
 
     def test_failure_remains_classified_and_redacted_after_restart(self):
         self.coach.fail=True
