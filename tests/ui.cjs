@@ -198,7 +198,7 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  await until(()=>d.getElementById('energy-today').textContent.includes('1740'));
  const activity=d.getElementById('activity-form');activity.elements.date.value='2026-09-25';activity.elements.pal.value='1.5';activity.elements.steps.value='8000';activity.elements.total_kcal.value='2500';activity.elements.intake_kcal.value='2100';submit('activity-form');
  await until(()=>d.getElementById('message').textContent==='活動記録を保存しました');
- assert.match(d.getElementById('activity-list').textContent,/-400 kcal/);
+ await until(()=>/-400 kcal/.test(d.getElementById('activity-list').textContent));
  assert(d.querySelector('#energy-chart svg'));
  assert(d.querySelector('#energy-chart svg.chart-cursor-svg'));
  assert.equal(d.querySelector('#energy-chart svg').getAttribute('tabindex'),'0');

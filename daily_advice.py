@@ -13,6 +13,7 @@ import time
 
 import energy
 import health_metrics
+from advice_diagnostics import sanitize_diagnostic, validate_advice_format, diagnose_failure
 from plan_review import PlanReviewer
 
 JST = energy.JST
@@ -107,6 +108,8 @@ class DailyAdvisor:
             return None
         item = dict(row)
         item['review'] = json.loads(item['review']) if item['review'] else None
+        item['diagnostics'] = json.loads(item['diagnostics']) if item.get('diagnostics') else None
+        item.pop('diagnostic_job_id', None)  # a bearer capability; never expose through routine history
         return item
 
     def history(self, user_id, limit=14):
@@ -116,6 +119,25 @@ class DailyAdvisor:
             rows = db.execute('SELECT * FROM ai_daily_advice WHERE user_id=? ORDER BY day DESC LIMIT ?', (user_id, limit)).fetchall()
         items = [self._row(r) for r in rows]
         return {'latest': items[0] if items else None, 'history': items, 'settings': self.status()}
+
+    def raw_diagnostics(self, user_id, day):
+        """Fetch transient raw output only on explicit user action, never save it."""
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
+            raise ValueError('診断対象の日付が不正です')
+        with self.store.connect() as db:
+            row = db.execute('SELECT diagnostic_job_id FROM ai_daily_advice WHERE user_id=? AND day=?',
+                             (user_id, day)).fetchone()
+        if row is None:
+            raise ValueError('対象のアドバイスが見つかりません')
+        job_id = row['diagnostic_job_id']
+        if not job_id:
+            raise ValueError('この実行にはLLMの原文記録がありません')
+        if not hasattr(self.coach, 'job_diagnostics'):
+            raise ValueError('この接続先は診断原文に未対応です')
+        data = self.coach.job_diagnostics(job_id, include_output=True)
+        summary = sanitize_diagnostic(data)
+        return {'day': day, 'diagnostics': summary, 'raw_output': data.get('raw_output', ''),
+                'warning': 'この原文には健康情報が含まれる可能性があります。共有前に確認してください。'}
 
     def _get(self, user_id, day):
         with self.store.connect() as db:
@@ -129,6 +151,8 @@ class DailyAdvisor:
                            (user_id, day, stamp, stamp, fields.get('status', 'running'), fields.get('trigger', 'schedule')))
             if 'review' in fields:
                 fields['review'] = json.dumps(fields['review'], ensure_ascii=False)
+            if 'diagnostics' in fields and isinstance(fields['diagnostics'], dict):
+                fields['diagnostics'] = json.dumps(fields['diagnostics'], ensure_ascii=False)
             sets = ', '.join(f'{k}=?' for k in fields)
             db.execute(f'UPDATE ai_daily_advice SET {sets}, updated_at=? WHERE user_id=? AND day=?',
                        list(fields.values()) + [stamp, user_id, day])
@@ -195,7 +219,7 @@ class DailyAdvisor:
         attempts = (previous['attempts'] if previous and trigger == 'schedule' else 0) + 1
         review = health_metrics.day_review(self.store, user_id, day)
         self._put(user_id, key, status='running', trigger=trigger, attempts=attempts, review=review,
-                  answer=None, error=None, provider=None)
+                  answer=None, error=None, provider=None, diagnostics=None, diagnostic_job_id=None)
         if review['recorded'] == 0:
             self._put(user_id, key, status='skipped', error='この日の記録がないため、AIには送信していません')
             return self._get(user_id, key)
@@ -209,8 +233,37 @@ class DailyAdvisor:
         question = (f'{key}の1日を、直前7日間の傾向（context.day_review）と比べて評価し、'
                     '翌日に向けた生活・食事・運動・睡眠・減量のアドバイスをください。')
         extra = {'day_review': review, 'review_date': key}
+        latest = {}
+        job_id = None
+        def progress(snapshot):
+            nonlocal job_id
+            if isinstance(snapshot, dict):
+                for key in ('status', 'error_code', 'elapsed_seconds', 'generation_seconds',
+                            'memory_available_bytes'):
+                    if key in snapshot:
+                        latest[key] = snapshot[key]
+                candidate = snapshot.get('request_id')
+                if isinstance(candidate, str) and re.fullmatch(r'req_[0-9a-f]{48}', candidate):
+                    job_id = candidate
+
+        def finish_diagnostic(error=None, answer=None):
+            summary = sanitize_diagnostic(latest)
+            if job_id and hasattr(self.coach, 'job_diagnostics'):
+                try:
+                    summary.update(sanitize_diagnostic(self.coach.job_diagnostics(job_id)))
+                except ValueError:
+                    summary['diagnostic_fetch_failed'] = True
+            if answer is not None:
+                warnings = validate_advice_format(answer)
+                summary['format_warnings'] = warnings
+                summary['format_status'] = 'warn' if warnings else 'valid'
+            if error is not None:
+                summary = diagnose_failure(str(error), summary)
+            return summary or None
+
         try:
-            answer = self.coach.ask(user_id, 'daily', question, extra=extra, cancelled=self._stop.is_set,
+            answer = self.coach.ask(user_id, 'daily', question, extra=extra, progress=progress,
+                                    cancelled=self._stop.is_set,
                                     poll=3 if trigger == 'manual' else POLL_SECONDS,
                                     label=f'毎日のアドバイス（{self._name(user_id)}・{day.month}/{day.day}分）',
                                     interactive=trigger == 'manual')['answer']
@@ -219,9 +272,11 @@ class DailyAdvisor:
             status = 'retry' if busy and trigger == 'schedule' and attempts < MAX_ATTEMPTS else 'failed'
             if status == 'retry':
                 self._retry_at[(user_id, key)] = time.monotonic() + RETRY_SECONDS
-            self._put(user_id, key, status=status, error=str(error), provider=ai['provider'])
+            self._put(user_id, key, status=status, error=str(error), provider=ai['provider'],
+                      diagnostics=finish_diagnostic(error=error), diagnostic_job_id=job_id)
             return self._get(user_id, key)
-        self._put(user_id, key, status='done', answer=answer, provider=ai['provider'])
+        self._put(user_id, key, status='done', answer=answer, provider=ai['provider'],
+                  diagnostics=finish_diagnostic(answer=answer), diagnostic_job_id=job_id)
         return self._get(user_id, key)
 
     # ---- schedule ----

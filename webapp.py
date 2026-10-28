@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.53"
+VERSION = "0.3.54"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -340,6 +340,10 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) != {'id'}:
                         raise ValueError('AI処理のIDを指定してください')
                     result = self.server.ai_jobs.cancel(body['id'])
+                elif path == '/api/wellness/advice/diagnostics/raw':
+                    if set(body) != {'user_id', 'day'}:
+                        raise ValueError('診断対象の利用者と日付が必要です')
+                    result = self.server.advisor.raw_diagnostics(body['user_id'], body['day'])
                 elif path == '/api/wellness/advice/run':
                     if not {'user_id'} <= set(body) <= {'user_id', 'day'}:
                         raise ValueError('利用者を指定してください')
