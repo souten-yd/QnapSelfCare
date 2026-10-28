@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile health_debug.py health_metrics.py daily_advice.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
+      - run: python -m py_compile health_debug.py health_metrics.py daily_advice.py ai_jobs.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24

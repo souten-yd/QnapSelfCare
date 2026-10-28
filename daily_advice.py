@@ -19,8 +19,6 @@ DEFAULT = {'enabled': True, 'time': '02:00', 'allow_external': False}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = 600
 POLL_SECONDS = 15
-JOB_DEADLINE_SECONDS = 45 * 60   # QnapAssistant: load 600 s + generation 1800 s by default
-TERMINAL = {'completed', 'failed', 'timed_out', 'cancelled'}
 
 
 def now_iso():
@@ -173,10 +171,8 @@ class DailyAdvisor:
                     '翌日に向けた生活・食事・運動・睡眠・減量のアドバイスをください。')
         extra = {'day_review': review, 'review_date': key}
         try:
-            if ai['provider'] == 'qnapassistant':
-                answer = self._run_job(user_id, question, extra)
-            else:
-                answer = self.coach.consult(user_id, 'daily', question, extra=extra)['answer']
+            answer = self.coach.ask(user_id, 'daily', question, extra=extra,
+                                    cancelled=self._stop.is_set, poll=POLL_SECONDS)['answer']
         except ValueError as error:
             busy = re.search(r'実行中|混雑|429', str(error))
             status = 'retry' if busy and trigger == 'schedule' and attempts < MAX_ATTEMPTS else 'failed'
@@ -186,24 +182,6 @@ class DailyAdvisor:
             return self._get(user_id, key)
         self._put(user_id, key, status='done', answer=answer, provider=ai['provider'])
         return self._get(user_id, key)
-
-    def _run_job(self, user_id, question, extra):
-        accepted = self.coach.start_consult(user_id, 'daily', question, extra=extra)
-        request_id = accepted['request_id']
-        waited = 0
-        while waited < JOB_DEADLINE_SECONDS and not self._stop.is_set():
-            self.sleep(POLL_SECONDS)
-            waited += POLL_SECONDS
-            state = self.coach.consult_job_status(request_id)
-            if state.get('status') == 'completed':
-                return self.coach.consult_job_result(request_id)['answer']
-            if state.get('status') in TERMINAL:
-                raise ValueError('QnapAssistantで処理が完了しませんでした: ' + str(state.get('error') or state.get('status')))
-        try:
-            self.coach.cancel_consult_job(request_id)
-        except ValueError:
-            pass
-        raise ValueError('QnapAssistantの処理が45分以内に完了しませんでした')
 
     # ---- schedule ----
     def tick(self):

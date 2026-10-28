@@ -8,7 +8,16 @@ const {spawn} = require('node:child_process');
 const data = fs.mkdtempSync(path.join(os.tmpdir(),'selfcare-ui-'));
 const child = spawn(process.env.PYTHON || 'python3',['webapp.py','--port','18863','--data-dir',data],{stdio:['ignore','pipe','pipe']});
 const base='http://127.0.0.1:18863';
-async function until(check){for(let i=0;i<100;i++){if(await check())return;await new Promise(r=>setTimeout(r,50));}throw Error('UI operation timed out');}
+const jsonResponse=(v,status=200)=>Promise.resolve(new Response(JSON.stringify(v),{status,headers:{'Content-Type':'application/json'}}));
+// Fake SelfCare AI job API: POST /api/ai/jobs then poll /api/ai/jobs/status until completed.
+function aiJobFetch(before,answerFor,stages=['completed']){
+ const f=(url,init)=>{
+  if(url==='/api/ai/jobs'&&init?.method==='POST'){const body=JSON.parse(init.body);f.bodies.push(body);const id='job_'+String(f.bodies.length).padStart(32,'0');f.answers[id]=answerFor(body);f.calls[id]=0;return jsonResponse({id,state:'queued',stage:'queued',elapsed_seconds:0},202);}
+  if(typeof url==='string'&&url.startsWith('/api/ai/jobs/status?id=')){const id=decodeURIComponent(url.split('=')[1]);const stage=stages[Math.min(f.calls[id]++,stages.length-1)];
+   return jsonResponse(stage==='completed'?{id,state:'completed',stage:'generating',elapsed_seconds:420,result:{answer:f.answers[id]}}:{id,state:'running',stage,elapsed_seconds:400,detail:'空きRAM 8.0 GiB'});}
+  return before(url,init);};
+ f.bodies=[];f.answers={};f.calls={};return f;}
+async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())return;await new Promise(r=>setTimeout(r,50));}throw Error('UI operation timed out');}
 (async()=>{let dom;try{
  await until(async()=>{try{return (await fetch(base+'/api/status')).ok;}catch{return false;}});
  const cursorAsset=await fetch(base+'/chart-cursor.js');
@@ -20,7 +29,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testPollCoachJob=pollCoachJob;');
+ w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -126,14 +135,14 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  d.querySelector('#coach-form [value="meal"]').click();d.getElementById('coach-form').dispatchEvent(new w.Event('change',{bubbles:true}));
  assert.match(d.getElementById('coach-presets').textContent,/外食/);
  {const bodies=[];const before=w.fetch;
-  w.fetch=(url,init)=>url==='/api/ai/consult'&&init?.method==='POST'?(bodies.push(JSON.parse(init.body)),Promise.resolve(new Response(JSON.stringify({answer:'## 要点\n- **減塩**を続ける\n<img src=x onerror=alert(1)>',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}}))):before(url,init);
+  w.fetch=aiJobFetch(before,()=>'## 要点\n- **減塩**を続ける\n<img src=x onerror=alert(1)>');const jobBodies=w.fetch.bodies;
   d.getElementById('coach-form').elements.question.value='塩分を減らしたい';submit('coach-form');
-  await until(()=>!d.getElementById('coach-answer').hidden);
+  await until(()=>!d.getElementById('coach-answer').hidden);assert.equal(jobBodies[0].kind,'consult');
   assert.equal(d.querySelector('#coach-answer h4').textContent,'要点');
   assert.equal(d.querySelector('#coach-answer li strong').textContent,'減塩');
   assert.equal(d.querySelector('#coach-answer img'),null);
   d.getElementById('coach-form').elements.question.value='外食のときは？';submit('coach-form');
-  await until(()=>bodies.length===2&&d.querySelectorAll('#coach-thread details').length===1);
+  await until(()=>jobBodies.length===2&&d.querySelectorAll('#coach-thread details').length===1);bodies.push(...jobBodies);
   assert.equal(bodies[0].mode,'meal');assert.equal(bodies[0].history,undefined);
   assert.equal(bodies[1].history[0].question,'塩分を減らしたい');
   d.getElementById('coach-reset').click();assert.equal(d.getElementById('coach-answer').hidden,true);
@@ -215,7 +224,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  d.getElementById('plan-info').click();assert.equal(d.getElementById('plan-explanation').hidden,false);assert.match(d.getElementById('plan-explanation').textContent,/2本の線は意味が違います/);
  assert.match(d.getElementById('plan-calc-preview').textContent,/基礎代謝/);
  const aiFetch=w.fetch;
- w.fetch=(url,init)=>url==='/api/ai/meal-estimate'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'朝食: パン 300 kcal、卵 150 kcal。小計 450 kcal。\n昼食: 700 kcal。\n夕食: 700 kcal。\n合計 1850 kcal。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):url==='/api/ai/consult'&&init?.method==='POST'?Promise.resolve(new Response(JSON.stringify({answer:'期間・標準摂取・生活活動・標準運動を比較して見直します。',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}})):aiFetch(url,init);
+ w.fetch=aiJobFetch(aiFetch,b=>b.kind==='meal'?'朝食: パン 300 kcal、卵 150 kcal。小計 450 kcal。\n昼食: 700 kcal。\n夕食: 700 kcal。\n合計 1850 kcal。':'期間・標準摂取・生活活動・標準運動を比較して見直します。');
  const meal=d.getElementById('meal-estimate-form');meal.elements.date.value='2026-09-25';meal.elements.breakfast.value='パンと卵';meal.elements.lunch.value='カレー';meal.elements.dinner.value='焼き魚定食';submit('meal-estimate-form');
  await until(()=>d.getElementById('meal-estimate-summary').textContent.includes('1850 kcal'));
  assert.match(d.getElementById('meal-estimate-summary').textContent,/パン 300 kcal.*卵 150 kcal/);
@@ -223,32 +232,17 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.notEqual(activity.elements.intake_kcal.value,'1850');assert.notEqual(plan.elements.target_kcal.value,'1850');
  d.getElementById('plan-ai').click();await until(()=>d.getElementById('plan-ai-answer').textContent.includes('標準運動'));
  w.fetch=aiFetch;
- // Test QnapAssistant asynchronous health consultation with a fake backend.
- const taskID='req_'+('a'.repeat(48)), previousFetch=w.fetch;
- let stateCalls=0;
- w.fetch=(url,init)=>{
-  if(url==='/api/ai/consult/start'&&init?.method==='POST')
-   return Promise.resolve(new Response(JSON.stringify({request_id:taskID,status:'queued'}),{status:202,headers:{'Content-Type':'application/json'}}));
-  if(typeof url==='string'&&url.includes('/api/ai/consult/status?')){
-   stateCalls++;return Promise.resolve(new Response(JSON.stringify({
-    request_id:taskID,status:stateCalls===1?'generating':'completed',elapsed_seconds:stateCalls*10,
-    stage_elapsed_seconds:7,memory_available_bytes:8*1073741824
-   }),{headers:{'Content-Type':'application/json'}}));
-  }
-  if(typeof url==='string'&&url.includes('/api/ai/consult/result?'))
-   return Promise.resolve(new Response(JSON.stringify({answer:'非同期AI相談の結果',provider:'qnapassistant',model:'auto'}),{headers:{'Content-Type':'application/json'}}));
-  return previousFetch(url,init);
- };
- d.getElementById('ai-form').elements.provider.value='qnapassistant';
+ // Long-running consultation (e.g. QnapAssistant loading a model for minutes): the browser only polls the job.
+ const previousFetch=w.fetch;
+ w.fetch=aiJobFetch(previousFetch,()=>'長時間のAI相談の結果',['loading_model','completed']);
  d.getElementById('coach-form').elements.question.value='睡眠と血圧について教えて';
  submit('coach-form');
- await until(()=>w.sessionStorage.getItem('selfcare-ai-consult-job-v1')?.includes(taskID));
- await until(()=>d.getElementById('coach-progress').textContent.includes('生成中'));
- assert.match(d.getElementById('coach-progress').textContent,/生成中/);
- assert.match(d.getElementById('coach-progress').textContent,/8.00 GiB/);
- await w.__testPollCoachJob();
- await until(()=>d.getElementById('coach-answer').textContent.includes('非同期AI相談の結果'));
- assert.equal(w.sessionStorage.getItem('selfcare-ai-consult-job-v1'),null);
+ await until(()=>/^\{"id":"job_/.test(w.sessionStorage.getItem('selfcare-ai-job-v2')||''));
+ await until(()=>d.getElementById('coach-progress').textContent.includes('モデルを読み込み中'));
+ assert.match(d.getElementById('coach-progress').textContent,/6分40秒/);
+ assert.match(d.getElementById('coach-progress').textContent,/8.0 GiB/);
+ await until(()=>d.getElementById('coach-answer').textContent.includes('長時間のAI相談の結果'),200);
+ assert.equal(w.sessionStorage.getItem('selfcare-ai-job-v2'),null);
  w.fetch=previousFetch;
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');
  await until(()=>d.getElementById('plan-history').textContent.includes('活動量に合わせ延長'));

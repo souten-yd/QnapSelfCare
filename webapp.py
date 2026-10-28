@@ -25,6 +25,7 @@ from protection import ProtectionManager
 from homehub_migration import MigrationManager
 from wellness_ai import Coach
 from daily_advice import DailyAdvisor
+from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
@@ -142,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.server.coach.status())
         elif path == '/api/ai/daily-settings':
             self._json(200, self.server.advisor.status())
+        elif path == '/api/ai/jobs/status':
+            self._json(200, self.server.ai_jobs.status(query.get('id', [''])[0]))
         elif path == '/api/wellness/advice':
             self._json(200, self.server.advisor.history(query.get('user_id', [''])[0]))
         elif path in ('/api/ai/consult/status', '/api/ai/consult/result'):
@@ -307,6 +310,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 elif path == '/api/ai/daily-settings':
                     result = self.server.advisor.save(body)
+                elif path == '/api/ai/jobs':
+                    self._json(202, self.server.ai_jobs.submit(body))
+                    return
+                elif path == '/api/ai/jobs/cancel':
+                    if set(body) != {'id'}:
+                        raise ValueError('AI処理のIDを指定してください')
+                    result = self.server.ai_jobs.cancel(body['id'])
                 elif path == '/api/wellness/advice/run':
                     if not {'user_id'} <= set(body) <= {'user_id', 'day'}:
                         raise ValueError('利用者を指定してください')
@@ -403,6 +413,7 @@ def serve(args):
         server.store, server.collector, server.protection = store, collector, protection
         server.coach = Coach(args.data_dir, store)
         server.advisor = DailyAdvisor(store, server.coach)
+        server.ai_jobs = AIJobs(server.coach)
         server.migration = MigrationManager(args.data_dir)
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()
