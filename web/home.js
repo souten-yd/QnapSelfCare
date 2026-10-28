@@ -211,13 +211,13 @@
     const sign = v => (v > 0 ? '+' : v < 0 ? '−' : '±')+num(Math.abs(v));
     const big = el('div', undefined, 'home-big'); big.append(el('strong', r.balance == null ? '—' : sign(r.balance)), el('span', r.balance == null ? '' : 'kcal'));
     if (r.balance != null) big.classList.add(r.balance <= 0 ? 'good' : 'warn');
-    target.append(el('span', '収支（摂取 − 消費）', 'home-label'), big);
+    target.append(el('span', '収支 ＝ 摂取 − 基礎代謝 − 活動エネルギー', 'home-label'), big);
     const formula = el('div', undefined, 'home-formula');
-    formula.append(stat('摂取', num(c.intake_kcal), c.intake_kcal == null ? '' : 'kcal', c.target_kcal ? `目標 ${num(c.target_kcal)}` : ''), el('span', '−（', 'op'),
-      stat('基礎代謝', num(c.bmr), c.bmr == null ? '' : 'kcal', '推定'), el('span', '+', 'op'),
-      stat('活動', num(active), active == null ? '' : 'kcal', active == null ? '記録なし' : 'ウォッチ'), el('span', '）', 'op'));
+    formula.append(stat('摂取', num(c.intake_kcal), c.intake_kcal == null ? '' : 'kcal', c.target_kcal ? `目標 ${num(c.target_kcal)}` : ''), el('span', '−', 'op'),
+      stat('基礎代謝', num(c.bmr), c.bmr == null ? '' : 'kcal', '推定'), el('span', '−', 'op'),
+      stat('活動', num(active), active == null ? '' : 'kcal', active == null ? '記録なし' : 'ウォッチ'));
     target.append(formula);
-    if (r.burn != null) target.append(el('p', `消費合計 ${num(r.burn)} kcal（基礎代謝${r.basis === 'bmr+active' ? '＋活動エネルギー' : 'のみ'}）`, 'home-note'));
+    if (r.burn != null) target.append(el('p', `消費合計 ${num(r.burn)} kcal${r.basis === 'bmr+active' ? '' : '（基礎代謝のみ）'}`, 'home-note'));
     const notes = [];
     if (c.intake_kcal == null) notes.push('今日の摂取は未入力です。');
     else if (c.source === 'routine') notes.push('摂取はいつもの設定の値です。');
