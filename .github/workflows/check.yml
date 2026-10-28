@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile health_debug.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
+      - run: python -m py_compile health_debug.py health_metrics.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.45 >/dev/null 2>&1; then
-            echo 'Release v0.3.45 already exists; leaving it unchanged.'
+          if gh release view v0.3.46 >/dev/null 2>&1; then
+            echo 'Release v0.3.46 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.45 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.45' \
-            --notes 'Add QnapAssistant asynchronous local health consultations: accepted request ID, model-loading/generation states, elapsed time and available RAM in SelfCare, manual cancellation and status recovery after browser reload. Legacy provider synchronous consultations remain compatible. Requires QnapAssistant v0.5.9 or later.' \
+          gh release create v0.3.46 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.46' \
+            --notes 'Add diet evaluation and body indicators to Home with references and confidence levels: weight-loss pace from a 28-day regression, fat share of loss, plan gap, goal forecast, logging consistency, 7-day home blood pressure (JSH 2019), BMI, visceral fat level, resting heart rate proxy, sleep duration and regularity, and 7-day steps. Key findings are added to the summary. Reference only, not a diagnosis.' \
             --target "$GITHUB_SHA"
 

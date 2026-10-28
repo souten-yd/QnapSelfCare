@@ -1,6 +1,7 @@
 """QnapSelfCare local health record manager."""
 import apple_health
 import health_debug
+import health_metrics
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -25,7 +26,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.45"
+VERSION = "0.3.46"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -133,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {'/api/wellness/energy': self.store.energy_report, '/api/wellness/profile': self.store.wellness_profile,
                              '/api/wellness/summary': self.store.wellness_summary,
                              '/api/wellness/meals': self.store.meals}[path](user_id))
+        elif path == '/api/wellness/metrics':
+            self._json(200, health_metrics.compute(self.store, query.get('user_id', [''])[0]))
         elif path == '/api/ai/settings':
             self._json(200, self.server.coach.status())
         elif path in ('/api/ai/consult/status', '/api/ai/consult/result'):
