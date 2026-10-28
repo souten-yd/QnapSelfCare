@@ -20,7 +20,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
+ w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testPollCoachJob=pollCoachJob;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -191,6 +191,33 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  assert.notEqual(activity.elements.intake_kcal.value,'1850');assert.notEqual(plan.elements.target_kcal.value,'1850');
  d.getElementById('plan-ai').click();await until(()=>d.getElementById('plan-ai-answer').textContent.includes('標準運動'));
  w.fetch=aiFetch;
+ // Test QnapAssistant asynchronous health consultation with a fake backend.
+ const taskID='req_'+('a'.repeat(48)), previousFetch=w.fetch;
+ let stateCalls=0;
+ w.fetch=(url,init)=>{
+  if(url==='/api/ai/consult/start'&&init?.method==='POST')
+   return Promise.resolve(new Response(JSON.stringify({request_id:taskID,status:'queued'}),{status:202,headers:{'Content-Type':'application/json'}}));
+  if(typeof url==='string'&&url.includes('/api/ai/consult/status?')){
+   stateCalls++;return Promise.resolve(new Response(JSON.stringify({
+    request_id:taskID,status:stateCalls===1?'generating':'completed',elapsed_seconds:stateCalls*10,
+    stage_elapsed_seconds:7,memory_available_bytes:8*1073741824
+   }),{headers:{'Content-Type':'application/json'}}));
+  }
+  if(typeof url==='string'&&url.includes('/api/ai/consult/result?'))
+   return Promise.resolve(new Response(JSON.stringify({answer:'非同期AI相談の結果',provider:'qnapassistant',model:'auto'}),{headers:{'Content-Type':'application/json'}}));
+  return previousFetch(url,init);
+ };
+ d.getElementById('ai-form').elements.provider.value='qnapassistant';
+ d.getElementById('coach-form').elements.question.value='睡眠と血圧について教えて';
+ submit('coach-form');
+ await until(()=>w.sessionStorage.getItem('selfcare-ai-consult-job-v1')?.includes(taskID));
+ await until(()=>d.getElementById('coach-progress').textContent.includes('生成中'));
+ assert.match(d.getElementById('coach-progress').textContent,/生成中/);
+ assert.match(d.getElementById('coach-progress').textContent,/8.00 GiB/);
+ await w.__testPollCoachJob();
+ await until(()=>d.getElementById('coach-answer').textContent.includes('非同期AI相談の結果'));
+ assert.equal(w.sessionStorage.getItem('selfcare-ai-consult-job-v1'),null);
+ w.fetch=previousFetch;
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');
  await until(()=>d.getElementById('plan-history').textContent.includes('活動量に合わせ延長'));
  assert.match(d.getElementById('plan-history').textContent,/2027-03-01/);

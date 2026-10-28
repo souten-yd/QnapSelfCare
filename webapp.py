@@ -26,7 +26,7 @@ from homehub_migration import MigrationManager
 from wellness_ai import Coach
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.45"
+VERSION = "0.3.46"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -138,6 +138,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, health_metrics.compute(self.store, query.get('user_id', [''])[0]))
         elif path == '/api/ai/settings':
             self._json(200, self.server.coach.status())
+        elif path in ('/api/ai/consult/status', '/api/ai/consult/result'):
+            request_id = query.get('request_id', [''])[0]
+            handler = self.server.coach.consult_job_status if path.endswith('/status') else self.server.coach.consult_job_result
+            self._json(200, handler(request_id))
         elif path == "/api/devices":
             self._json(200, self.store.devices())
         elif path in ('/api/apple-health/debug', '/api/apple-health/debug/download'):
@@ -290,6 +294,15 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) not in ({'user_id', 'mode', 'question'}, {'user_id', 'mode', 'question', 'consent'}):
                         raise ValueError('相談内容を指定してください')
                     result = self.server.coach.consult(body['user_id'], body['mode'], body['question'])
+                elif path == '/api/ai/consult/start':
+                    if set(body) != {'user_id', 'mode', 'question'}:
+                        raise ValueError('相談内容を指定してください')
+                    self._json(202, self.server.coach.start_consult(body['user_id'], body['mode'], body['question']))
+                    return
+                elif path == '/api/ai/consult/cancel':
+                    if set(body) != {'request_id'}:
+                        raise ValueError('受付IDを指定してください')
+                    result = self.server.coach.cancel_consult_job(body['request_id'])
                 elif path == "/api/devices":
                     result = self.store.save_device(body)
                 elif path == "/api/records":
