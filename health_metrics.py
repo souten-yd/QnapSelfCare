@@ -35,9 +35,74 @@ def ols(points):
     return slope, se, my + slope * (max(xs) - mx)
 
 
+# Plain-language explanation shown on the 健康サポート indicators tab.
+EXPLAIN = {
+    'weight_pace': {
+        'what': '体重が1週間あたりどのくらいのペースで変化しているか。',
+        'how': '直近4週間の毎日の平均体重に直線を当てはめ（回帰）、その傾きを週あたりと体重比（%）で表します。±2標準誤差の幅が0をまたぐときは「はっきりしない」と判定します。',
+        'why': '体重は水分や食事で1日に0.5〜1kg動くため、前日比では判断できません。回帰を使うと誤差は約±0.1kg/週まで小さくなります（シミュレーションで確認）。速すぎる減量は筋肉量の減少やリバウンドにつながりやすく、週に体重の1%以内が一般的な上限です。',
+        'caveat': '体重計に乗る時間帯をそろえると精度が上がります。'},
+    'fat_share': {
+        'what': '減った体重のうち、どれだけが脂肪だったか。',
+        'how': '体重×体脂肪率で脂肪量を求め、直近8週間の体重と脂肪量の変化の傾きを比べます。',
+        'why': '食事制限だけの減量では、筋肉など除脂肪量が10〜30%ほど減るとされます。脂肪の割合が低いときは、たんぱく質や筋力運動を見直すきっかけになります。',
+        'caveat': '体組成計（生体インピーダンス）の推定値は誤差が大きいため、8週間で3kg以上減ったときだけ判定し、信頼度は「低」です。'},
+    'plan_gap': {
+        'what': '保存した減量計画の線と比べて、いまどれだけ進んでいるか。',
+        'how': '開始日と目標日を直線で結んだ計画線上の今日の体重と、平滑化した現在の体重の差です。',
+        'why': '週ごとのずれに早く気づくと、目標日や摂取量の見直しが小さな調整で済みます。',
+        'caveat': '計画線は単純な直線です。実際の減量は後半ほどゆるやかになりがちです。'},
+    'goal_forecast': {
+        'what': 'いまのペースが続いた場合に目標体重に届くおおよその日付。',
+        'how': '残りの体重を現在の減量ペースで割って求めます。',
+        'why': '目標日に間に合うかの目安になります。',
+        'caveat': '代謝の低下などで減り方は鈍くなるため、予測は楽観的になりやすく信頼度は「低」です。'},
+    'energy_consistency': {
+        'what': '記録した摂取・消費と、実際の体重の動きが合っているか。',
+        'how': '記録上の平均収支（摂取−基礎代謝−活動エネルギー）と、体重の変化から逆算した収支（1kg≒7,700kcal）の差を比べます。',
+        'why': '差が大きいときは、食事の記録漏れや基礎代謝の推定ずれが考えられます。記録の精度を上げるヒントになります。',
+        'caveat': '7,700kcal/kgは概算で、減量初期は水分の変動が大きいため信頼度は「低」です。'},
+    'home_bp': {
+        'what': '家庭で測った血圧の1週間の平均と、その分類。',
+        'how': '直近7日の測定日ごとの平均を、さらに平均します。日本高血圧学会2019の家庭血圧の基準（正常<115/75、正常高値115〜124、高値125〜134または75〜84、高血圧≥135/85）で分類します。',
+        'why': '家庭血圧は診察室の血圧より将来の病気との関連が強いとされ、複数日の平均で判断することが推奨されています。シミュレーションでは、7日平均だと3日平均より分類の正確さが上がりました（67%→83%）。',
+        'caveat': '朝の起床後1時間以内（排尿後・朝食前）など、同じ条件で測るのがおすすめです。'},
+    'bmi': {
+        'what': '身長に対する体重の割合。',
+        'how': '体重(kg)÷身長(m)²。体組成計の値があればそれを使います。',
+        'why': '日本肥満学会の基準で18.5未満は低体重、25以上は肥満です。',
+        'caveat': '筋肉量が多い人では高めに出ます。'},
+    'visceral_fat': {
+        'what': 'おなかの内臓まわりの脂肪の目安。',
+        'how': 'オムロン体組成計が表示する内臓脂肪レベルをそのまま使います（1〜9 標準、10〜14 やや高い、15以上 高い）。',
+        'why': '内臓脂肪は血圧・血糖・脂質の異常と関係が深いとされます。',
+        'caveat': '機器独自の推定値で、CTで測る内臓脂肪面積とは異なり、メーカーによって基準も違います。'},
+    'resting_hr': {
+        'what': '安静にしているときの心拍数の目安と、その変化。',
+        'how': 'ウォッチの心拍記録のうち、1日の下位10%の値を安静時の代わりに使い、直近7日と前の3週間を比べます。',
+        'why': '安静時心拍が10上がるごとに死亡リスクが約9%高まるという報告があります（CMAJ 2016）。普段より5以上上がったときは、睡眠不足・疲れ・体調不良のサインのことがあります。',
+        'caveat': 'ウォッチの安静時心拍そのものではなく、記録から推定した目安です。'},
+    'sleep_duration': {
+        'what': '1晩あたりの睡眠時間（7夜の平均）。',
+        'how': 'ウォッチの睡眠記録から、覚醒・ベッドにいただけの時間を除き、重なりを1回だけ数えます。前日18時〜当日18時を1晩とします。',
+        'why': '厚生労働省の睡眠ガイド2023は、成人に6時間以上を目安としています。7〜9時間を推奨域としています。',
+        'caveat': 'ウォッチの睡眠判定は推定です。'},
+    'sleep_regularity': {
+        'what': '寝る・起きる時刻が毎日そろっているか。',
+        'how': '直近14夜の睡眠の中央時刻のばらつき（標準偏差）を分で表します。30分以内を良好とします。',
+        'why': '睡眠の規則性は、睡眠時間よりも死亡リスクとの関連が強いという大規模研究があります（Sleep 2024、UK Biobank）。',
+        'caveat': '研究で使われる指標（SRI）を単純化した代わりの指標です。'},
+    'steps': {
+        'what': '1日の歩数（今日を除く7日の平均）。',
+        'how': 'ウォッチ・iPhoneの歩数記録を日ごとに合計します。記録元が複数あるときは件数が最も多い記録元だけを数えます。',
+        'why': '厚生労働省の身体活動ガイド2023は、成人で1日約8,000歩、高齢者で約6,000歩を目安としています。死亡リスクの低下は60歳未満で8,000〜10,000歩、60歳以上で6,000〜8,000歩で頭打ちになるという報告があります（Lancet Public Health 2022）。',
+        'caveat': '目安は年齢（身体情報）から自動で切り替えます。Homeの歩数目標とは別です。'},
+}
+
+
 def metric(key, label, value, status, detail, reference, confidence, short=None):
     return {'id': key, 'label': label, 'value': value, 'status': status, 'detail': detail,
-            'reference': reference, 'confidence': confidence, 'short': short}
+            'reference': reference, 'confidence': confidence, 'short': short, 'explain': EXPLAIN.get(key)}
 
 
 def unknown(key, label, detail, reference):
@@ -395,3 +460,96 @@ def compute(store, user_id, current=None):
               resting_hr(samples, today), sleep_duration(nights), sleep_regularity(nights),
               daily_steps(samples, today, profile.get('age'))]
     return {'date': today.isoformat(), 'diet': diet, 'health': health, 'summary': summary_sentences(diet, health)}
+
+
+# ---- Daily review: one day compared with the 7 days before it ----
+
+def _compare(key, label, unit, value, history, higher_is_better=None, digits=0, band=0.1):
+    """value vs mean of the previous days; band is the ±share treated as 'usual'."""
+    prior = [v for v in history if v is not None]
+    if value is None:
+        return {'id': key, 'label': label, 'unit': unit, 'value': None, 'avg7': round(mean(prior), digits) if prior else None,
+                'diff': None, 'trend': 'none', 'status': 'unknown'}
+    avg = mean(prior) if len(prior) >= 3 else None
+    diff = value - avg if avg is not None else None
+    if diff is None:
+        trend = 'none'
+    elif abs(diff) <= abs(avg) * band:
+        trend = 'usual'
+    else:
+        trend = 'up' if diff > 0 else 'down'
+    status = 'ok' if trend in ('usual', 'none') or higher_is_better is None else \
+        'good' if (trend == 'up') == higher_is_better else 'warn'
+    r = (lambda v: round(v, digits) if v is not None else None)
+    return {'id': key, 'label': label, 'unit': unit, 'value': r(value), 'avg7': r(avg), 'diff': r(diff), 'trend': trend, 'status': status}
+
+
+def day_review(store, user_id, day):
+    """Deterministic review of `day` (JST date) against the previous 7 days. Works without AI."""
+    start = day - timedelta(days=7)
+    utc = lambda value: value.astimezone(timezone.utc).isoformat()
+    since = datetime(start.year, start.month, start.day, tzinfo=JST) - timedelta(hours=6)
+    until = datetime(day.year, day.month, day.day, tzinfo=JST) + timedelta(days=1)
+    with store.connect() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise ValueError('利用者が見つかりません')
+        records = [store.unpack(r) for r in db.execute(
+            'SELECT * FROM measurements WHERE user_id=? AND measured_at>=? AND measured_at<? ORDER BY measured_at',
+            (user_id, utc(since), utc(until)))]
+        samples = [json.loads(r[0]) for r in db.execute(
+            'SELECT payload FROM apple_health_samples WHERE user_id=? AND end_at>=? AND start_at<? ORDER BY start_at',
+            (user_id, utc(since), utc(until)))]
+    days = [start + timedelta(days=i) for i in range(8)]  # 7 previous days + the day itself
+    totals = {d: {} for d in days}
+    for metric_key in ('steps', 'active_energy'):
+        counts = {}
+        for s in samples:
+            if s['metric'] == metric_key:
+                counts[s['source']] = counts.get(s['source'], 0) + 1
+        source = max(counts, key=counts.get) if counts else None
+        for s in samples:
+            if s['metric'] == metric_key and s['source'] == source:
+                d = local_day(s['start_at'])
+                if d in totals:
+                    totals[d][metric_key] = totals[d].get(metric_key, 0) + s['value']
+    nights = sleep_nights(samples, day, 8)
+    report = store.energy_report(user_id)
+    hist = {h['date']: h for h in report.get('history', [])}
+    entries = {e['date']: e for e in report.get('entries', report.get('diaries', []))}
+    def series(fn):
+        return [fn(d) for d in days[:-1]], fn(day)
+    def balance(d):
+        h, a = hist.get(d.isoformat(), {}), totals[d].get('active_energy')
+        return h['intake_kcal'] - (h['bmr'] + a) if h.get('intake_kcal') is not None and h.get('bmr') is not None and a is not None else None
+    weights = daily_means([r for r in records if r['kind'] == 'body_composition'], 'weight', start, day)
+    systolic = daily_means([r for r in records if r['kind'] == 'blood_pressure'], 'systolic', start, day)
+    items = []
+    for key, label, unit, fn, better, digits in (
+            ('steps', '歩数', '歩', lambda d: totals[d].get('steps'), True, 0),
+            ('active_energy', '活動エネルギー', 'kcal', lambda d: totals[d].get('active_energy'), True, 0),
+            ('exercise', '運動時間', '分', lambda d: (entries.get(d.isoformat()) or {}).get('minutes'), True, 0),
+            ('sleep', '睡眠時間', '時間', lambda d: nights[d]['minutes'] / 60 if d in nights else None, None, 1),
+            ('intake', '摂取', 'kcal', lambda d: hist.get(d.isoformat(), {}).get('intake_kcal'), False, 0),
+            ('balance', '収支（摂取−基礎代謝−活動）', 'kcal', balance, False, 0),
+            ('weight', '体重', 'kg', lambda d: weights.get(d), False, 1),
+            ('systolic', '最高血圧', 'mmHg', lambda d: systolic.get(d), False, 0)):
+        before, value = series(fn)
+        band = 0.005 if key == 'weight' else 0.05 if key == 'systolic' else 0.1
+        items.append(_compare(key, label, unit, value, before, better, digits, band))
+    by = {i['id']: i for i in items}
+    if by['sleep']['value'] is not None:
+        hours = by['sleep']['value']
+        by['sleep']['status'] = 'good' if 7 <= hours <= 9 else 'ok' if hours >= 6 else 'warn'
+    if by['balance']['value'] is not None:
+        by['balance']['status'] = 'good' if by['balance']['value'] <= 0 else 'warn'
+    recorded = [i for i in items if i['value'] is not None]
+    notes = []
+    for i in items:
+        if i['trend'] in ('up', 'down') and i['avg7'] is not None:
+            word = 'いつもより多め' if i['trend'] == 'up' else 'いつもより少なめ'
+            if i['id'] in ('weight', 'systolic'):
+                word = 'いつもより高め' if i['trend'] == 'up' else 'いつもより低め'
+            if i['id'] == 'balance':
+                word = 'いつもより摂取が上回る' if i['trend'] == 'up' else 'いつもより消費が上回る'
+            notes.append(f"{i['label']}は{word}（{i['value']:g}{i['unit']}、7日平均{i['avg7']:g}{i['unit']}）")
+    return {'date': day.isoformat(), 'items': items, 'recorded': len(recorded), 'notes': notes[:4]}

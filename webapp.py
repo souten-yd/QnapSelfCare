@@ -24,9 +24,11 @@ from durability import DataUnavailable, file_lock
 from protection import ProtectionManager
 from homehub_migration import MigrationManager
 from wellness_ai import Coach
+from daily_advice import DailyAdvisor
+import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.47"
+VERSION = "0.3.48"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -138,6 +140,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, health_metrics.compute(self.store, query.get('user_id', [''])[0]))
         elif path == '/api/ai/settings':
             self._json(200, self.server.coach.status())
+        elif path == '/api/ai/daily-settings':
+            self._json(200, self.server.advisor.status())
+        elif path == '/api/wellness/advice':
+            self._json(200, self.server.advisor.history(query.get('user_id', [''])[0]))
         elif path in ('/api/ai/consult/status', '/api/ai/consult/result'):
             request_id = query.get('request_id', [''])[0]
             handler = self.server.coach.consult_job_status if path.endswith('/status') else self.server.coach.consult_job_result
@@ -299,6 +305,21 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('相談内容を指定してください')
                     self._json(202, self.server.coach.start_consult(body['user_id'], body['mode'], body['question'], body.get('history')))
                     return
+                elif path == '/api/ai/daily-settings':
+                    result = self.server.advisor.save(body)
+                elif path == '/api/wellness/advice/run':
+                    if not {'user_id'} <= set(body) <= {'user_id', 'day'}:
+                        raise ValueError('利用者を指定してください')
+                    today = daily_advice.datetime.now(daily_advice.JST).date()
+                    choice = body.get('day', 'yesterday')
+                    if choice == 'yesterday':
+                        day = today - daily_advice.timedelta(days=1)
+                    elif choice == 'today':
+                        day = today
+                    else:
+                        raise ValueError('対象日は yesterday または today です')
+                    self._json(202, self.server.advisor.start(body['user_id'], day))
+                    return
                 elif path == '/api/ai/consult/cancel':
                     if set(body) != {'request_id'}:
                         raise ValueError('受付IDを指定してください')
@@ -381,15 +402,18 @@ def serve(args):
     with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
         server.store, server.collector, server.protection = store, collector, protection
         server.coach = Coach(args.data_dir, store)
+        server.advisor = DailyAdvisor(store, server.coach)
         server.migration = MigrationManager(args.data_dir)
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()
         protection.start()
+        server.advisor.start_scheduler()
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
         print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)
         try:
             server.serve_forever()
         finally:
+            server.advisor.close()
             protection.close()
             collector.close()
 

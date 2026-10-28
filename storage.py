@@ -162,11 +162,20 @@ class Store:
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     created_at TEXT NOT NULL, config TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ai_settings(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS ai_daily_schedule(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS ai_daily_advice(
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    day TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    status TEXT NOT NULL, trigger TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    review TEXT, answer TEXT, error TEXT, provider TEXT,
+                    PRIMARY KEY(user_id, day));
                 PRAGMA user_version=1;
             ''')
             db.executescript(apple_health.SCHEMA_SQL)
             db.execute("UPDATE jobs SET state='failed',finished_at=?,message=? WHERE state IN ('queued','running')",
                        (now(), "サービス再起動により中断されました。再実行してください"))
+            db.execute("UPDATE ai_daily_advice SET status='failed',updated_at=?,error=? WHERE status='running'",
+                       (now(), "サービス再起動により中断されました。再作成できます"))
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -660,6 +669,7 @@ class Store:
                     "weight_plans": [dict(json.loads(r['config']), user_id=r['user_id'], created_at=r['created_at']) for r in db.execute('SELECT * FROM weight_plans ORDER BY id')],
                     "meal_notes": [dict(r) for r in db.execute('SELECT * FROM meal_notes')],
                     "ai_settings": (json.loads(value[0]) if (value := db.execute('SELECT config FROM ai_settings WHERE id=1').fetchone()) else None),
+                    "ai_daily_schedule": (json.loads(value[0]) if (value := db.execute('SELECT config FROM ai_daily_schedule WHERE id=1').fetchone()) else None),
                     "deleted": [r[0] for r in db.execute("SELECT fingerprint FROM deleted_measurements")],
                     "apple_health_samples": apple_health.backup_rows(db),
                     "records": [self.unpack(r) for r in db.execute("SELECT * FROM measurements")]}
@@ -763,6 +773,9 @@ class Store:
             if backup.get('ai_settings') is not None:
                 from wellness_ai import validate as validate_ai
                 db.execute('INSERT INTO ai_settings VALUES(1,?)', (json.dumps(validate_ai(backup['ai_settings'])),))
+            if backup.get('ai_daily_schedule') is not None:
+                from daily_advice import validate as validate_schedule
+                db.execute('INSERT INTO ai_daily_schedule VALUES(1,?)', (json.dumps(validate_schedule(backup['ai_daily_schedule'])),))
         self._clear_read_cache()
         return {"restored": len(records), "users": len(users), "devices": len(devices)}
 

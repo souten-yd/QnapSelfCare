@@ -69,3 +69,6 @@ assert.equal(h.summaryText({remaining: 3.4, change7: null, bpHigh: true, steps: 
   evaluations: ['減量ペースは週0.41kg減で適正。', '家庭血圧の7日平均は127/81で高値血圧。']}),
   '目標体重まであと3.4kg。減量ペースは週0.41kg減で適正。家庭血圧の7日平均は127/81で高値血圧。');
 console.log('Home summary evaluations: passed');
+assert.equal(h.adviceHighlights('## 要点\n- よく歩けました\n## 提案\n- 早く寝る'), '- よく歩けました');
+assert.equal(h.adviceHighlights('前置きのみ'), '前置きのみ');
+console.log('Home advice highlights: passed');

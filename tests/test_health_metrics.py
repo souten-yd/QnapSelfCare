@@ -167,6 +167,14 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(by['weight_pace']['status'], 'good')
         self.assertEqual(by['home_bp']['status'], 'warn')
         self.assertEqual(by['steps']['status'], 'good')
+        for m in result['diet'] + result['health']:
+            self.assertTrue(all(m['explain'][k] for k in ('what', 'how', 'why', 'caveat')), m['id'])
+        review = hm.day_review(store, user, TODAY - timedelta(days=1))
+        steps = next(i for i in review['items'] if i['id'] == 'steps')
+        self.assertEqual((steps['value'], steps['avg7'], steps['trend']), (9000, 9000, 'usual'))
+        weight = next(i for i in review['items'] if i['id'] == 'weight')
+        # -0.28 kg vs the 7-day mean stays inside the ±0.5% band (daily weight noise), so it is 'usual'.
+        self.assertEqual((weight['value'], weight['avg7'], weight['trend']), (76.1, 76.3, 'usual'))
         self.assertEqual(result['summary'][0], '減量ペースは週0.49kg減で適正。')
         self.assertIn('家庭血圧の7日平均は138/86で高血圧の範囲。', result['summary'])
         with self.assertRaises(ValueError):

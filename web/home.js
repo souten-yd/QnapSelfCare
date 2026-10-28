@@ -74,7 +74,7 @@
     return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
   }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -115,6 +115,28 @@
       if (CONFIDENCE_TEXT[m.confidence]) meta.append(el('span', CONFIDENCE_TEXT[m.confidence], 'eval-confidence '+m.confidence));
       box.append(head, el('p', m.detail, 'eval-detail'), meta); li.append(box); target.append(li);
     }
+  }
+  // Home shows only the 要点 section of the latest daily advice.
+  function adviceHighlights(answer) {
+    const lines = String(answer || '').split('\n');
+    const start = lines.findIndex(l => /^#{1,4}\s*要点/.test(l));
+    if (start < 0) return lines.slice(0, 4).join('\n');
+    const end = lines.findIndex((l, i) => i > start && /^#{1,4}\s/.test(l));
+    return lines.slice(start + 1, end < 0 ? undefined : end).join('\n').trim();
+  }
+  function renderAdviceCard(item) {
+    const card = $('home-advice-card'), box = $('home-advice');
+    if (!item || !['done', 'review_only'].includes(item.status)) { card.hidden = true; return; }
+    card.hidden = false; box.replaceChildren();
+    const d = new Date(item.day + 'T12:00:00');
+    box.append(el('p', `${d.getMonth()+1}月${d.getDate()}日の振り返り${item.trigger === 'schedule' ? '（自動作成）' : ''}`, 'home-advice-date'));
+    if (item.answer) {
+      const body = el('div', undefined, 'ai-answer home-advice-body');
+      if (typeof renderMarkdown === 'function') renderMarkdown(body, adviceHighlights(item.answer)); else body.textContent = adviceHighlights(item.answer);
+      box.append(body);
+    } else if (item.review?.notes?.length) {
+      const ul = el('ul', undefined, 'advice-notes'); item.review.notes.forEach(n => ul.append(el('li', n))); box.append(ul);
+    } else box.append(el('p', 'この日の記録はいつもどおりでした。', 'home-empty'));
   }
   function renderSummary(tiles, text) {
     const box = $('home-summary'); box.replaceChildren();
@@ -335,12 +357,14 @@
     $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
     if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
     for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
-    if (!userId) { renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
+    if (!userId) { renderAdviceCard(null); renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
     let rows = [], error = null, metrics = null;
     const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
     try { rows = await fetchSamples(userId, dayStart(days[0])-6*3600000, dayStart(todayKey)+DAY); } catch (e) { error = e; }
     metrics = await metricsRequest;
+    fetch('/api/wellness/advice?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
+      .then(data => { if (ticket === serial) renderAdviceCard(data?.latest || null); }).catch(() => renderAdviceCard(null));
     if (ticket !== serial) return;
     const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
     const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));
