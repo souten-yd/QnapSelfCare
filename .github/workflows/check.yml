@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.46 >/dev/null 2>&1; then
-            echo 'Release v0.3.46 already exists; leaving it unchanged.'
+          if gh release view v0.3.47 >/dev/null 2>&1; then
+            echo 'Release v0.3.47 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.46 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.46' \
-            --notes 'Add diet evaluation and body indicators to Home with references and confidence levels: weight-loss pace from a 28-day regression, fat share of loss, plan gap, goal forecast, logging consistency, 7-day home blood pressure (JSH 2019), BMI, visceral fat level, resting heart rate proxy, sleep duration and regularity, and 7-day steps. Key findings are added to the summary. Reference only, not a diagnosis.' \
+          gh release create v0.3.47 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.47' \
+            --notes 'Reorganise the health support and settings pages into tabs for easier use: daily input, meals and energy on one tab, weight plan, AI consultation and profile on their own tabs; settings grouped into users, AI, data import, backup, integrations and system. AI consultation adds theme chips with example questions, a list of the data sent, follow-up questions with recent turns, safely rendered Markdown answers with copy, and the Home evaluation indicators in the context.' \
             --target "$GITHUB_SHA"
 

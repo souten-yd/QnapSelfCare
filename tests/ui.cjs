@@ -118,6 +118,27 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
 
  d.querySelector('[data-page="wellness"]').click();
  await until(()=>d.getElementById('wellness-summary').textContent.includes('直近の血圧'));
+ assert.equal(d.querySelector('[data-panel="today"]').hidden,false);
+ d.querySelector('[data-tabs="wellness"] [data-tab="coach"]').click();
+ assert.equal(d.querySelector('[data-panel="today"]').hidden,true);assert.equal(d.querySelector('[data-panel="coach"]').hidden,false);
+ assert.equal(d.querySelector('[data-tabs="wellness"] [data-tab="coach"]').getAttribute('aria-selected'),'true');
+ assert(d.querySelectorAll('#coach-presets .chip-button').length>=3);
+ d.querySelector('#coach-form [value="meal"]').click();d.getElementById('coach-form').dispatchEvent(new w.Event('change',{bubbles:true}));
+ assert.match(d.getElementById('coach-presets').textContent,/外食/);
+ {const bodies=[];const before=w.fetch;
+  w.fetch=(url,init)=>url==='/api/ai/consult'&&init?.method==='POST'?(bodies.push(JSON.parse(init.body)),Promise.resolve(new Response(JSON.stringify({answer:'## 要点\n- **減塩**を続ける\n<img src=x onerror=alert(1)>',provider:'local',model:'auto'}),{headers:{'Content-Type':'application/json'}}))):before(url,init);
+  d.getElementById('coach-form').elements.question.value='塩分を減らしたい';submit('coach-form');
+  await until(()=>!d.getElementById('coach-answer').hidden);
+  assert.equal(d.querySelector('#coach-answer h4').textContent,'要点');
+  assert.equal(d.querySelector('#coach-answer li strong').textContent,'減塩');
+  assert.equal(d.querySelector('#coach-answer img'),null);
+  d.getElementById('coach-form').elements.question.value='外食のときは？';submit('coach-form');
+  await until(()=>bodies.length===2&&d.querySelectorAll('#coach-thread details').length===1);
+  assert.equal(bodies[0].mode,'meal');assert.equal(bodies[0].history,undefined);
+  assert.equal(bodies[1].history[0].question,'塩分を減らしたい');
+  d.getElementById('coach-reset').click();assert.equal(d.getElementById('coach-answer').hidden,true);
+  w.fetch=before;}
+ d.querySelector('[data-tabs="wellness"] [data-tab="today"]').click();
  const wellbeing=d.getElementById('wellness-form');wellbeing.elements.height_cm.value='180';wellbeing.elements.age.value='40';wellbeing.elements.sex.value='male';submit('wellness-form');
  await until(()=>d.getElementById('message').textContent==='健康設定と計画を保存しました');
  assert.equal((await (await fetch(base+'/api/wellness/profile?user_id='+d.getElementById('current-user').value)).json()).height_cm,180);

@@ -17,7 +17,7 @@ async function refreshWellness(){
   '7日以上の体重変化':summary.weight_change_7d_kg==null?'比較できる記録がありません':`${summary.weight_change_7d_kg>0?'+':''}${summary.weight_change_7d_kg} kg`,
   '目標':summary.goal_weight_kg==null?'未設定':`${summary.goal_weight_kg} kg${summary.profile.goal_date?'（'+summary.profile.goal_date+'まで）':''}`,
   '目標への週あたりの変化':summary.weekly_change_needed_kg==null?'—':`${summary.weekly_change_needed_kg} kg/週の減量`};
- $('wellness-summary').replaceChildren();for(const [label,value] of Object.entries(rows))$('wellness-summary').append(element('dt',label),element('dd',String(value)));
+ $('wellness-summary').replaceChildren();for(const [label,value] of Object.entries(rows)){const item=element('div');item.append(element('dt',label),element('dd',String(value)));$('wellness-summary').append(item);}
  $('wellness-notices').replaceChildren();for(const notice of summary.notices)$('wellness-notices').append(element('p',notice,'notice'));if(!summary.notices.length)$('wellness-notices').append(element('p','現在の設定で追加の見直し通知はありません。','notice'));
  $('meal-list').replaceChildren();for(const m of meals.slice(0,20)){const row=element('div',undefined,'meal-row');row.append(element('span',dateText(m.created_at)+'　'+m.note+(m.calories===null?'':'　約'+m.calories+' kcal')));const remove=element('button','削除','danger');remove.type='button';remove.addEventListener('click',guarded(async()=>{if(!confirm('この食事メモを削除しますか？'))return;await api('/api/wellness/meals',{user_id:userId,id:m.id},'DELETE');await refreshWellness();message('食事メモを削除しました');}));const reuse=element('button','同じ内容を入力','secondary');reuse.type='button';reuse.onclick=()=>{const f=$('meal-form');f.elements.note.value=m.note;f.elements.calories.value=m.calories??'';f.elements.note.focus();};row.append(reuse,remove);$('meal-list').append(row);}
 }
@@ -29,6 +29,50 @@ $('wellness-form').addEventListener('submit',guarded(async()=>{
 $('meal-form').addEventListener('submit',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');const f=$('meal-form');await api('/api/wellness/meals',{user_id,meal:{note:f.elements.note.value,calories:f.elements.calories.value?Number(f.elements.calories.value):null}});f.reset();await refreshWellness();message('食事メモを保存しました');
 }));
+// Minimal, safe Markdown for AI answers: headings, lists, bold. Built from text nodes only (never innerHTML).
+function renderMarkdown(target,text){
+ target.replaceChildren();let list=null,para=null;
+ const inline=(node,line)=>{line.split(/(\*\*[^*]+\*\*)/).forEach(part=>{if(/^\*\*[^*]+\*\*$/.test(part))node.append(element('strong',part.slice(2,-2)));else if(part)node.append(document.createTextNode(part));});};
+ for(const raw of String(text).split('\n')){
+  const line=raw.trimEnd();const heading=line.match(/^#{1,4}\s+(.*)$/),bullet=line.match(/^\s*(?:[-*・•]|\d+[.)])\s+(.*)$/);
+  if(!line.trim()){list=null;para=null;continue;}
+  if(heading){list=null;para=null;const h=element('h4');inline(h,heading[1]);target.append(h);continue;}
+  if(bullet){para=null;if(!list){list=element(/^\s*\d/.test(line)?'ol':'ul');target.append(list);}const li=element('li');inline(li,bullet[1]);list.append(li);continue;}
+  list=null;if(!para){para=element('p');target.append(para);}else para.append(element('br'));inline(para,line);
+ }
+}
+const COACH_PRESETS={
+ health:['この1週間の変化をまとめて','気になる数値はある？','次の受診で伝えるとよいことは？'],
+ lifestyle:['歩数を無理なく増やすには？','睡眠のリズムを整えたい','運動を習慣にするコツは？'],
+ meal:['最近の食事の良い点と改善点は？','夕食の量を減らす工夫は？','外食が多い日の選び方は？'],
+ diet:['今の目標は無理がない？','停滞しているときの見直し方は？','目標日までのペースは妥当？'],
+ review:['計画どおりに進んでいる？','計画を見直すなら何を変える？','摂取量と運動、どちらを調整すべき？']};
+let coachTurns=[];
+function coachMode(){return $('coach-form').elements.mode.value||'health';}
+function renderCoachPresets(){
+ const box=$('coach-presets');box.replaceChildren();
+ for(const text of COACH_PRESETS[coachMode()]||[]){const b=element('button',text,'chip-button');b.type='button';b.addEventListener('click',()=>{const q=$('coach-form').elements.question;q.value=text;q.focus();});box.append(b);}
+}
+function renderCoachThread(){
+ const thread=$('coach-thread');thread.replaceChildren();
+ coachTurns.slice(0,-1).forEach((turn,i)=>{const d=element('details',undefined,'coach-turn');d.append(element('summary',`${i+1}. ${turn.question}`));const body=element('div',undefined,'ai-answer');renderMarkdown(body,turn.answer);d.append(body);thread.append(d);});
+}
+function showCoachAnswer(question,answer){
+ coachTurns.push({question:question||'（再接続した相談）',answer});coachTurns=coachTurns.slice(-4);
+ renderCoachThread();const box=$('coach-answer');renderMarkdown(box,answer);
+ const q=element('p','Q. '+(question||'（再接続した相談）'),'coach-question');box.prepend(q);
+ box.hidden=false;$('coach-actions').hidden=false;$('coach-plan').hidden=false;$('coach-reset').hidden=false;
+ const f=$('coach-form');f.elements.question.value='';f.elements.question.placeholder='続けて質問できます（直前のやり取りも送ります）';
+ box.scrollIntoView({block:'start',behavior:'smooth'});
+}
+function resetCoach(){
+ coachTurns=[];renderCoachThread();$('coach-answer').hidden=true;$('coach-actions').hidden=true;$('coach-reset').hidden=true;
+ const q=$('coach-form').elements.question;q.placeholder='例: この一週間の変化を踏まえて食事の工夫を考えたい';
+}
+$('coach-form').addEventListener('change',e=>{if(e.target.name==='mode')renderCoachPresets();});
+$('coach-reset').addEventListener('click',resetCoach);
+$('coach-copy').addEventListener('click',guarded(async()=>{const text=coachTurns.at(-1)?.answer||'';try{await navigator.clipboard.writeText(text);message('回答をコピーしました');}catch{throw Error('コピーできませんでした。回答を長押しして選択してください');}}));
+renderCoachPresets();
 // The async QnapAssistant job ID is a short-lived capability. Store only the
 // opaque ID (never health inputs/responses) so a page reload can resume polling.
 const coachJobKey='selfcare-ai-consult-job-v1';
@@ -75,8 +119,7 @@ async function pollCoachJob(){
   try{
    const result=await api('/api/ai/consult/result?request_id='+encodeURIComponent(current.id));
    if(coachActiveJob!==current||$('current-user').value!==current.user_id)return;
-   $('coach-answer').textContent=result.answer;
-   $('coach-answer').hidden=false;$('coach-plan').hidden=false;
+   showCoachAnswer(current.question,result.answer);
    coachProgress('回答を取得しました','受付ID '+current.id+' ／ 処理完了');clearCoachJob();
    message('相談への回答を受け取りました');
   }catch(e){coachProgress('回答の取得を再試行中',e.message);scheduleCoachPoll(3500);}
@@ -97,18 +140,19 @@ function resumeCoachJob(){
 $('coach-form').addEventListener('submit',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');
  if(coachActiveJob)throw Error('相談処理が進行中です。完了またはキャンセル後に再実行してください');
- const f=$('coach-form'),params={user_id,mode:f.elements.mode.value,question:f.elements.question.value};
- $('coach-answer').hidden=true;$('coach-plan').hidden=true;
+ const f=$('coach-form'),params={user_id,mode:coachMode(),question:f.elements.question.value};
+ if(coachTurns.length)params.history=coachTurns.slice(-3).map(t=>({question:t.question,answer:t.answer.slice(0,4000)}));
  if($('ai-form').elements.provider.value!=='qnapassistant'){
   coachProgress('同期APIで相談中','現在の相談先では従来の同期方式で実行します。');
   const result=await api('/api/ai/consult',params);
-  $('coach-answer').textContent=result.answer;$('coach-answer').hidden=false;$('coach-plan').hidden=false;
+  showCoachAnswer(params.question,result.answer);
   $('coach-progress').hidden=true;message('相談への回答を受け取りました');return;
  }
  coachProgress('相談を受付中','QnapAssistantへ安全に相談を送信しています…');
  const accepted=await api('/api/ai/consult/start',params);
- coachActiveJob={id:accepted.request_id,user_id};
- sessionStorage.setItem(coachJobKey,JSON.stringify(coachActiveJob));
+ coachActiveJob={id:accepted.request_id,user_id,question:params.question};
+ // Only the opaque ID and user are persisted; the question stays in memory.
+ sessionStorage.setItem(coachJobKey,JSON.stringify({id:coachActiveJob.id,user_id}));
  coachProgress('受付済み','受付ID '+coachActiveJob.id+' ／ 状況を確認しています…');
  scheduleCoachPoll(0);
 }));
@@ -118,8 +162,8 @@ $('coach-cancel').addEventListener('click',guarded(async()=>{
  await api('/api/ai/consult/cancel',{request_id:current.id});
  if(coachActiveJob===current){coachProgress('キャンセル済み','受付ID '+current.id);clearCoachJob();}
 }));
-$('coach-plan').addEventListener('click',()=>{const field=$('wellness-form').elements.plan_text;field.value=$('coach-answer').textContent.slice(0,8000);field.focus();message('計画欄へコピーしました。内容を確認して保存してください');});
-async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+config.provider+(config.provider==='openrouter'?'（外部サービス）':'（ローカル）');}
+$('coach-plan').addEventListener('click',()=>{const field=$('wellness-form').elements.plan_text;field.value=(coachTurns.at(-1)?.answer||'').slice(0,8000);selectTab('wellness','profile');field.focus();message('計画欄へコピーしました。内容を確認して保存してください');});
+async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+({controldeck:'ControlDeck',qnapassistant:'QnapAssistant',local:'ローカルLLM',openrouter:'OpenRouter'}[config.provider]||config.provider)+(config.provider==='openrouter'?'（外部サービス）':'（NAS・LAN内）');}
 $('ai-form').addEventListener('submit',guarded(async()=>{const f=$('ai-form');await api('/api/ai/settings',{provider:f.elements.provider.value,base_url:f.elements.base_url.value.trim(),model:f.elements.model.value.trim()});await refreshAiSettings();message('AIの接続先を保存しました');}));
 $('ai-key-form').addEventListener('submit',guarded(async()=>{const f=$('ai-key-form');await api('/api/ai/key',{provider:$('ai-form').elements.provider.value,key:f.elements.key.value});f.reset();await refreshAiSettings();message('APIキーを更新しました');}));
 $('ai-form').elements.provider.addEventListener('change',()=>{const f=$('ai-form');const p=f.elements.provider.value;if(p==='qnapassistant')f.elements.base_url.value='http://127.0.0.1:11435/v1';else if(p==='openrouter')f.elements.base_url.value='https://openrouter.ai/api/v1';else f.elements.base_url.value='';f.elements.model.value=p==='openrouter'?'openai/gpt-4o-mini':'auto';});
@@ -217,7 +261,7 @@ function renderEnergy(data,summary){
  fillActivity((data.entries||data.diaries).find(x=>x.date===data.today)||{date:data.today,...(data.routine||{}),pal:current.pal});$('activity-status').textContent='同じ日の保存はその日の入力を更新します。いつもの設定の変更は今日以降の未入力日に反映します。';
  $('routine-status').textContent=data.routine?`いつもの設定：活動係数 ${data.routine.pal} ／ 摂取 ${energyValue(data.routine.intake_kcal,' kcal/日')}。未入力の日に自動で使います。`:'いつもの設定は未登録です。前回の入力を使って保存することもできます。';$('routine-stop').hidden=!data.routine;
  const list=$('activity-list');list.replaceChildren();for(const entry of [...(data.entries||data.diaries)].reverse().slice(0,90)){const row=element('div',undefined,'energy-log');const h=data.history.find(x=>x.date===entry.date);row.append(element('strong',entry.date+(entry.source==='routine'?'（いつもの設定）':'（その日の入力）')),element('span',`歩数 ${energyValue(entry.steps)} · 運動 ${energyValue(entry.minutes,'分')} · 総消費 ${energyValue(h?.total_kcal,' kcal')}（${h?.total_source||'—'}） · 摂取 ${energyValue(entry.intake_kcal,' kcal')} · 収支 ${energyValue(h?.balance_kcal,' kcal')}`),element('span',entry.note));
- const actions=element('div',undefined,'row');const edit=element('button','編集','secondary');edit.type='button';edit.onclick=()=>{fillActivity(entry);$('activity-form').elements.reuse.value='once';$('activity-form').closest('details').open=true;$('activity-form').scrollIntoView({block:'center'});};const remove=element('button','削除','danger');remove.type='button';const userId=$('current-user').value;remove.onclick=guarded(async()=>{if(!confirm(entry.date+'の活動記録を削除しますか？'))return;await api('/api/wellness/activity',{user_id:userId,date:entry.date},'DELETE');await refreshWellness();message('その日の入力を削除しました。いつもの設定があればそれを表示します');});actions.append(edit);if(entry.source!=='routine')actions.append(remove);row.append(actions);list.append(row);}
+ const actions=element('div',undefined,'row');const edit=element('button','編集','secondary');edit.type='button';edit.onclick=()=>{fillActivity(entry);$('activity-form').elements.reuse.value='once';selectTab('wellness','today');$('activity-form').scrollIntoView({block:'center'});};const remove=element('button','削除','danger');remove.type='button';const userId=$('current-user').value;remove.onclick=guarded(async()=>{if(!confirm(entry.date+'の活動記録を削除しますか？'))return;await api('/api/wellness/activity',{user_id:userId,date:entry.date},'DELETE');await refreshWellness();message('その日の入力を削除しました。いつもの設定があればそれを表示します');});actions.append(edit);if(entry.source!=='routine')actions.append(remove);row.append(actions);list.append(row);}
  if(!(data.entries||data.diaries).length)list.append(element('p','活動記録はまだありません。','muted'));
  const p=data.active_plan,f=$('weight-plan-form');f.reset();f.elements.start_date.value=data.today;f.elements.start_weight.value=summary.latest_weight??'';
  if(p){ensureOption(f.elements.pal,p.pal,'保存済み');ensureOption(f.elements.exercise_met,p.exercise_met??1,'保存済み');for(const k of [...planNumbers,'goal_date'])f.elements[k].value=p[k]??(k==='exercise_minutes'?0:k==='exercise_met'?1:'');}
@@ -244,11 +288,11 @@ $('plan-ai').addEventListener('click',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');if(!energyData?.active_plan)throw Error('先に減量計画を保存してください');
  $('plan-ai-answer').hidden=false;$('plan-ai-answer').textContent='AIで計画を分析中…';
  const question='現在の減量計画について、目標の計画線と代謝変化を含む試算の差、plan_analysis、直近の週次実績を使って説明してください。目標達成に向け、目標日の延長、標準摂取、生活活動、標準運動の4つをどう調整できるか具体的な候補を示し、無理な減量や安全ガード下限を下回る摂取は提案しないでください。推定と実測を区別し、優先順位ではなく選択肢とトレードオフとして示してください。';
- const result=await api('/api/ai/consult',{user_id,mode:'review',question});$('plan-ai-answer').textContent=result.answer;message('AIの計画分析を受け取りました');
+ const result=await api('/api/ai/consult',{user_id,mode:'review',question});renderMarkdown($('plan-ai-answer'),result.answer);message('AIの計画分析を受け取りました');
 }));
 $('meal-estimate-form').addEventListener('submit',guarded(async()=>{
  const f=$('meal-estimate-form');const meals={date:f.elements.date.value,breakfast:f.elements.breakfast.value,lunch:f.elements.lunch.value,dinner:f.elements.dinner.value,snacks:f.elements.snacks.value};
  $('meal-estimate-result').hidden=false;$('meal-estimate-summary').textContent='AIで試算中…';
- try{const result=await api('/api/ai/meal-estimate',{meals});$('meal-estimate-summary').textContent=result.answer;}
+ try{const result=await api('/api/ai/meal-estimate',{meals});renderMarkdown($('meal-estimate-summary'),result.answer);}
  catch(error){$('meal-estimate-summary').textContent='試算できませんでした: '+error.message;throw error;}
 }));

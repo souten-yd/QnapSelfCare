@@ -11,10 +11,45 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
+import health_metrics
+
 DEFAULT = {'provider': 'controldeck', 'base_url': '', 'model': 'auto'}
 PROVIDERS = ('controldeck', 'qnapassistant', 'local', 'openrouter')
 MODES = {'health': '健康記録の整理', 'meal': '食事の振り返り',
-         'diet': '無理のない目標検討', 'review': '計画の見直し'}
+         'diet': '無理のない目標検討', 'review': '計画の見直し', 'lifestyle': '運動・睡眠の振り返り'}
+# What each theme should focus on; appended to the shared system prompt.
+MODE_GUIDE = {
+    'health': '体重・血圧・睡眠・活動の変化を整理し、良い点と気になる点を分けて示してください。',
+    'meal': '食事メモと摂取量から、続けやすい改善を具体的な料理や量の例で示してください。',
+    'diet': '目標体重と期日が無理のない範囲か、減量ペースと安全な下限に照らして検討してください。',
+    'review': '計画線・試算・週次実績の差を数値で示し、目標日の延長・摂取・生活活動・運動の調整候補とトレードオフを比較してください。',
+    'lifestyle': '歩数・運動時間・睡眠時間と規則性・安静時心拍の目安から、日常に取り入れやすい工夫を示してください。',
+}
+SYSTEM_PROMPT = (
+    'あなたは個人の健康記録・食事・減量計画の振り返りを支援するアシスタントです。'
+    '診断、治療、薬の変更、断定的なカロリー処方はしません。気になる症状や続く異常値は医療機関への相談を勧めます。'
+    'contextの数値だけを根拠にし、ない数値を作りません。測定値・推定値・いつもの設定による仮定を区別します。'
+    'evaluationsは公的ガイドライン等の目安と比べた判定で、status=unknownはデータ不足です。'
+    '無理な減量やBMI下限を下回る目標は勧めません。'
+    '回答は日本語で、次の見出しを使った簡潔なMarkdownにしてください：'
+    '「## 要点」（2〜3行）、「## 根拠になったデータ」（箇条書き、数値つき）、「## 提案」（すぐ試せる行動を最大3つ）、「## 注意」（必要な場合のみ）。'
+)
+MAX_HISTORY = 3
+
+
+def clean_history(history):
+    """Previous turns for a follow-up question: at most 3, each trimmed."""
+    if history is None:
+        return []
+    if not isinstance(history, list) or len(history) > MAX_HISTORY:
+        raise ValueError('前の相談は3件までです')
+    turns = []
+    for turn in history:
+        if not isinstance(turn, dict) or set(turn) != {'question', 'answer'} or \
+                not all(isinstance(turn[k], str) for k in turn):
+            raise ValueError('前の相談の形式が不正です')
+        turns.append({'question': turn['question'].strip()[:2000], 'answer': turn['answer'].strip()[:4000]})
+    return turns
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -99,7 +134,7 @@ class Coach:
                     temporary.unlink(missing_ok=True)
         return {'provider': provider, 'key_configured': path.exists()}
 
-    def _consult_payload(self, user_id, mode, question, consent=None):
+    def _consult_payload(self, user_id, mode, question, consent=None, history=None):
         if mode not in MODES or not isinstance(question, str) or not 1 <= len(question.strip()) <= 2000:
             raise ValueError('相談内容または種類が不正です')
         config = self.settings()
@@ -122,17 +157,28 @@ class Coach:
         context['energy_notices'] = activity['notices']
         context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)
         context['plan_analysis'] = activity.get('plan_analysis')
-        prompt = {'model': config['model'], 'stream': False, 'max_tokens': 1200 if mode in ('diet', 'review') else 600,
-                  'messages': [{'role': 'system', 'content':
-                      'あなたは健康記録・食事・減量計画の整理を支援します。診断、治療、薬の変更や断定的なカロリー処方はしません。'
-                      '測定値と推定値を区別し、個人目標は本人の確認後にだけ適用します。気になる症状や継続する異常値は医療者への相談を促します。'
-                      '無理な減量やBMI下限を下回る目標を勧めません。計画見直しでは数値の根拠、調整候補とトレードオフを具体的に説明してください。'},
-                    {'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
-                       'question': question.strip()}, ensure_ascii=False)}]}
+        context['evaluations'] = self._evaluations(user_id)
+        turns = clean_history(history)
+        messages = [{'role': 'system', 'content': SYSTEM_PROMPT + MODE_GUIDE[mode]}]
+        for turn in turns:
+            messages += [{'role': 'user', 'content': turn['question']}, {'role': 'assistant', 'content': turn['answer']}]
+        messages.append({'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
+                         'question': question.strip()}, ensure_ascii=False)})
+        prompt = {'model': config['model'], 'stream': False,
+                  'max_tokens': 1400 if mode in ('diet', 'review') else 900, 'messages': messages}
         return config, prompt
 
-    def consult(self, user_id, mode, question, consent=None):
-        config, prompt = self._consult_payload(user_id, mode, question, consent)
+    def _evaluations(self, user_id):
+        """Compact indicator list for the prompt; a failure here must not block the consultation."""
+        try:
+            result = health_metrics.compute(self.store, user_id)
+        except Exception:
+            return None
+        return [{'group': group, 'label': m['label'], 'value': m['value'], 'status': m['status'], 'basis': m['reference']}
+                for group in ('diet', 'health') for m in result[group]]
+
+    def consult(self, user_id, mode, question, consent=None, history=None):
+        config, prompt = self._consult_payload(user_id, mode, question, consent, history)
         return self._complete(config, prompt)
 
     def _assistant_job_url(self, config, job_id=''):
@@ -179,8 +225,8 @@ class Coach:
         except (TypeError, KeyError, json.JSONDecodeError) as error:
             raise ValueError('QnapAssistantから不正なジョブ応答を受信しました') from error
 
-    def start_consult(self, user_id, mode, question):
-        config, prompt = self._consult_payload(user_id, mode, question)
+    def start_consult(self, user_id, mode, question, history=None):
+        config, prompt = self._consult_payload(user_id, mode, question, history=history)
         endpoint = self._assistant_job_url(config)
         if config['model'] == 'auto':
             prompt.pop('model', None)

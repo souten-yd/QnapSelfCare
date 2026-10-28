@@ -356,3 +356,78 @@ button.chart-cursor-close{margin-left:auto;padding:1px 8px;min-width:30px;min-he
 @media(max-width:700px){.eval-value{margin-left:auto;width:auto;font-size:14px}.eval-label{font-size:12.5px}}
 .home-eval-item>details>summary{position:relative;padding-right:18px}
 .home-eval-item>details>summary::after{position:absolute;right:0;top:2px;margin:0}
+
+/* ---- Page structure shared by 健康サポート and 設定 ---- */
+.page-head h1{margin-bottom:4px}.page-head p{margin:4px 0 18px}
+.subnav{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:8px 0 10px;margin:0 0 14px;background:var(--background)}
+.subnav::-webkit-scrollbar{display:none}
+.subnav button{flex:none;background:var(--surface);color:var(--secondary-text);border:1px solid var(--border);border-radius:999px;padding:8px 16px;font-size:13px;font-weight:700;min-height:40px}
+.subnav button:hover{background:var(--surface-soft)}
+.subnav button.active{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.tab-panel>.card:first-child,.tab-panel>.two-col:first-child>.card{margin-top:0}
+.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.card-head h2{margin:0}
+.inline-label{flex-direction:row;align-items:center;gap:8px;font-weight:600;font-size:12px}
+.two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:18px 0}
+.two-col>.card{margin:0;min-width:0}
+.span-2{grid-column:1/-1}
+.form-section{font-size:13px;color:var(--muted);letter-spacing:.5px;margin:18px 0 0}
+.form-section:first-child{margin-top:0}
+.sr-label{font-size:0;gap:0}
+.list-title{font-size:13px;margin:18px 0 4px;color:var(--muted)}
+details.more,details.help{margin:12px 0;border-top:1px dashed var(--border);padding-top:10px}
+details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
+/* いまの状態 as tiles */
+.stat-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:0}
+.stat-list>div{background:var(--surface-soft);border-radius:12px;padding:10px 12px;min-width:0}
+.stat-list dt{font-size:11px;color:var(--muted);font-weight:600}
+.stat-list dd{font-size:15px;font-weight:700;margin-top:2px;overflow-wrap:anywhere}
+#wellness-notices .notice{margin:10px 0 0}
+.meal-grid{grid-template-columns:minmax(0,2fr) minmax(0,1fr);margin:0 0 12px}
+.meal-card .meal-row{font-size:13px}
+/* ---- AI consultation ---- */
+.chip-group{border:none;padding:0;margin:0 0 12px;display:flex;flex-wrap:wrap;gap:6px}
+.chip-group legend{font-size:13px;font-weight:600;margin-bottom:6px;padding:0}
+.chip{position:relative;flex-direction:row;font-weight:600}
+.chip input{position:absolute;opacity:0;pointer-events:none}
+.chip span{display:inline-block;padding:7px 14px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--secondary-text);font-size:13px;cursor:pointer}
+.chip input:checked+span{background:var(--selected);border-color:var(--primary);color:var(--link)}
+.chip input:focus-visible+span{outline:3px solid var(--focus);outline-offset:2px}
+.coach-presets{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.chip-button{background:var(--surface-soft);color:var(--secondary-text);border:1px dashed var(--border);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600}
+.chip-button:hover{background:var(--selected)}
+.coach-card textarea{min-height:84px}
+.coach-context{margin:12px 0;font-size:13px}
+.coach-context ul{margin:6px 0;padding-left:20px;color:var(--secondary-text)}
+.coach-thread{display:grid;gap:6px;margin-top:14px}
+.coach-turn{background:var(--surface-soft);border-radius:12px;padding:10px 12px}
+.coach-turn>summary{font-size:13px;color:var(--secondary-text)}
+.ai-answer{background:var(--surface-soft);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-top:12px;overflow-wrap:anywhere;line-height:1.75;font-size:14px}
+.ai-answer h4{font-size:14px;margin:14px 0 4px;color:var(--link)}
+.ai-answer h4:first-child,.ai-answer .coach-question+h4{margin-top:4px}
+.ai-answer p{color:var(--text);margin:6px 0}
+.ai-answer ul,.ai-answer ol{margin:4px 0;padding-left:22px}
+.ai-answer li{margin:2px 0}
+.coach-question{font-weight:700;color:var(--secondary-text)!important;border-bottom:1px solid var(--border);padding-bottom:8px}
+.coach-actions{margin-top:10px;justify-content:flex-start}
+#plan-ai-answer{white-space:normal;max-height:none}
+#meal-estimate-summary{white-space:normal}
+/* ---- Settings ---- */
+.danger-zone{margin:14px 0;border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.danger-zone>summary{font-size:13px;color:var(--danger)}
+@media(max-width:1000px){.two-col{grid-template-columns:1fr}}
+@media(max-width:700px){
+ .page-head p{font-size:12px}
+ .subnav{margin:0 -14px 10px;padding:8px 14px 10px}
+ .subnav button{padding:7px 13px;font-size:12.5px}
+ .two-col{gap:10px;margin:10px 0}
+ .stat-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .meal-grid{grid-template-columns:1fr}
+ .ai-answer{padding:12px;font-size:13.5px}
+}
+#wellness-summary.stat-list{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}
+#energy-chart svg,#weight-plan-chart svg{max-width:760px;margin:0 auto}
+@media(max-width:700px){#wellness-summary.stat-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.coach-card .coach-thread{margin:0 0 6px}
+.coach-card #coach-answer{margin:0 0 6px}
+.coach-card .coach-actions{margin:0 0 16px;padding-bottom:16px;border-bottom:1px solid var(--border)}

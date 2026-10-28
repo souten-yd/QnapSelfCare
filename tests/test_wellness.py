@@ -87,6 +87,37 @@ class WellnessTests(unittest.TestCase):
                     coach.test_connection()
                 self.assertNotIn('secret', str(caught.exception))
 
+    def test_consult_follow_up_history_mode_and_evaluations(self):
+        coach = Coach(self.tmp.name, self.store)
+        coach.save({'provider': 'local', 'base_url': 'http://localhost:8765/v1', 'model': 'auto'})
+        requests = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, size): return b'{"choices":[{"message":{"content":"ok"}}]}'
+        class Opener:
+            def open(self, request, timeout):
+                requests.append(request)
+                return Response()
+        history = [{'question': '前の質問', 'answer': '前の回答' * 2000}]
+        with patch('wellness_ai.build_opener', return_value=Opener()):
+            coach.consult(self.user, 'lifestyle', '睡眠を整えたい', history=history)
+        data = json.loads(requests[0].data)
+        roles = [m['role'] for m in data['messages']]
+        self.assertEqual(roles, ['system', 'user', 'assistant', 'user'])
+        self.assertIn('歩数', data['messages'][0]['content'])          # lifestyle guide
+        self.assertIn('## 要点', data['messages'][0]['content'])       # structured answer format
+        self.assertEqual(len(data['messages'][2]['content']), 4000)    # previous answer trimmed
+        payload = json.loads(data['messages'][-1]['content'])
+        self.assertEqual(payload['topic'], '運動・睡眠の振り返り')
+        labels = [e['label'] for e in payload['context']['evaluations']]
+        self.assertIn('家庭血圧（7日平均）', labels)
+        for bad in ([{'question': 'q'}], [{'question': 'q', 'answer': 'a'}] * 4, 'text'):
+            with self.assertRaises(ValueError):
+                coach.consult(self.user, 'health', '質問', history=bad)
+        with self.assertRaises(ValueError):
+            coach.consult(self.user, 'unknown', '質問')
+
     def test_ai_button_sends_aggregate_without_checkbox(self):
         coach = Coach(self.tmp.name, self.store)
         coach.save({'provider': 'local', 'base_url': 'http://localhost:8765/v1', 'model': 'auto'})
