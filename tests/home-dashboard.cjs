@@ -54,3 +54,8 @@ assert.equal(h.stepGoalOf({step_goal: 10000}), 10000);
 assert.equal(h.stepGoalOf({step_goal: 'x'}), 8000);
 assert.equal(h.stepGoalOf({step_goal: 500}), 8000);
 console.log('Home step goal: passed');
+assert.deepEqual(h.energyBalance(1600, 450, 1900), {burn: 2050, balance: -150, basis: 'bmr+active'});
+assert.deepEqual(h.energyBalance(1600, null, 1900), {burn: 1600, balance: 300, basis: 'bmr'});
+assert.deepEqual(h.energyBalance(1600, 450.6, null), {burn: 2051, balance: null, basis: 'bmr+active'});
+assert.deepEqual(h.energyBalance(null, 450, 1900), {burn: null, balance: null, basis: null});
+console.log('Home energy balance: passed');
