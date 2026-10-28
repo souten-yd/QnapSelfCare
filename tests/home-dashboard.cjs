@@ -59,3 +59,9 @@ assert.deepEqual(h.energyBalance(1600, null, 1900), {burn: 1600, balance: 300, b
 assert.deepEqual(h.energyBalance(1600, 450.6, null), {burn: 2051, balance: null, basis: 'bmr+active'});
 assert.deepEqual(h.energyBalance(null, 450, 1900), {burn: null, balance: null, basis: null});
 console.log('Home energy balance: passed');
+assert.equal(h.summaryText({remaining: 3.4, change7: -0.5, bpHigh: false, steps: 3111, stepGoal: 10000, sleep: 6.9*3600000, sleepAvg: 7.5*3600000, balance: 125}),
+  '目標体重まであと3.4kg（1週間で0.5kg減）。歩数は目標まであと6,889歩。睡眠は平均より36分短め。今日の収支は+125kcal（摂取が上回っています）。');
+assert.equal(h.summaryText({remaining: 0, change7: null, bpHigh: true, steps: 12000, stepGoal: 8000, sleep: null, sleepAvg: null, balance: -300}),
+  '目標体重に到達しています。血圧が参考上限を超えています。歩数は目標を達成。昨夜の睡眠記録はありません。今日の収支は−300kcal。');
+assert.equal(h.summaryText({remaining: null, change7: null, bpHigh: false, steps: null, stepGoal: 8000, sleep: 7*3600000, sleepAvg: null, balance: null}), '記録がそろうと、ここに今日のまとめを表示します。');
+console.log('Home summary text: passed');

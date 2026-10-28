@@ -61,8 +61,19 @@
     const burn = Math.round(bmr + (ok(active) ? active : 0));
     return {burn, balance: ok(intake) ? Math.round(intake - burn) : null, basis: ok(active) ? 'bmr+active' : 'bmr'};
   }
+  // One or two plain sentences that highlight what needs attention today.
+  function summaryText(x) {
+    const out = [];
+    if (x.remaining != null) out.push(x.remaining <= 0 ? '目標体重に到達しています。' : `目標体重まであと${x.remaining.toFixed(1)}kg${x.change7 != null && x.change7 < 0 ? `（1週間で${Math.abs(x.change7).toFixed(1)}kg減）` : x.change7 != null && x.change7 > 0 ? `（1週間で${x.change7.toFixed(1)}kg増）` : ''}。`);
+    if (x.bpHigh) out.push('血圧が参考上限を超えています。');
+    if (x.steps != null) out.push(x.steps >= x.stepGoal ? '歩数は目標を達成。' : `歩数は目標まであと${Math.round(x.stepGoal-x.steps).toLocaleString('ja-JP')}歩。`);
+    if (x.sleep != null && x.sleepAvg != null) { const d = Math.round((x.sleep-x.sleepAvg)/60000); if (Math.abs(d) >= 20) out.push(`睡眠は平均より${Math.abs(d)}分${d < 0 ? '短め' : '長め'}。`); }
+    else if (x.sleep == null) out.push('昨夜の睡眠記録はありません。');
+    if (x.balance != null) out.push(`今日の収支は${x.balance > 0 ? '+' : x.balance < 0 ? '−' : '±'}${Math.abs(x.balance).toLocaleString('ja-JP')}kcal${x.balance > 0 ? '（摂取が上回っています）' : ''}。`);
+    return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
+  }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, energyBalance, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -90,9 +101,16 @@
     return box;
   }
 
-  function checks(items) {
-    const list = $('home-checks'); list.replaceChildren();
-    for (const [done, text] of items) { const li = el('li', undefined, done ? 'done' : ''); li.append(el('span', done ? '✓' : '・', 'mark'), el('span', text)); list.append(li); }
+  function renderSummary(tiles, text) {
+    const box = $('home-summary'); box.replaceChildren();
+    for (const t of tiles) {
+      const tile = el('div', undefined, 'home-summary-tile'+(t.state ? ' '+t.state : ''));
+      const head = el('span', undefined, 'tile-head'); head.append(el('span', t.label));
+      if (t.mark) head.append(el('span', t.mark, 'mark'));
+      const value = el('strong', t.value); if (t.unit && t.value !== '—') value.append(el('small', ' '+t.unit));
+      tile.append(head, value, el('small', t.sub || '', 'tile-sub')); box.append(tile);
+    }
+    $('home-summary-text').textContent = text;
   }
 
   function sparkline(weights, plan, goal) {
@@ -302,7 +320,7 @@
     $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
     if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
     for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week']) if (!userId) empty($(id), '利用者を選択してください。');
-    if (!userId) { checks([]); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
+    if (!userId) { renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
     let rows = [], error = null;
     try { rows = await fetchSamples(userId, dayStart(days[0])-6*3600000, dayStart(todayKey)+DAY); } catch (e) { error = e; }
@@ -318,7 +336,7 @@
     $('home-goal-summary').textContent = `歩数目標 ${num(STEP_GOAL)} 歩を変更`;
     const todayEntry = energy ? (energy.entries || energy.diaries || []).find(x => x.date === energy.today) : null;
     $('home-source').textContent = error ? error.message : source ? `記録元：${source === 'unknown' ? '不明' : source}` : '';
-    renderDiet(energy, summary);
+    const diet = renderDiet(energy, summary);
     renderActivity(totals[todayKey], todayEntry);
     const sleptDays = days.filter(d => nights[d]);
     const sleepAvg = sleptDays.length ? sleptDays.reduce((a, d) => a+nights[d].total, 0)/sleptDays.length : null;
@@ -342,10 +360,25 @@
       total: v => v.total, parts: v => SLEEP_STAGES.map(s => ({value: v.stages[s], color: `var(--sleep-${s})`, title: `${STAGE_NAMES[s]} ${hm(v.stages[s])}`})), short: v => (v.total/3600000).toFixed(1)+'h'});
     const latest = kind => (typeof chartRecords !== 'undefined' ? chartRecords : []).find(r => r.kind === kind && r.user_id === userId);
     const measuredToday = kind => { const r = latest(kind); return !!r && dayKey(Date.parse(r.measured_at)) === todayKey; };
-    const steps = totals[todayKey].steps;
-    checks([[measuredToday('body_composition'), '体重'], [measuredToday('blood_pressure'), '血圧'],
-      [!!nights[todayKey], nights[todayKey] ? `睡眠 ${hm(nights[todayKey].total)}` : '睡眠'],
-      [steps != null && steps >= STEP_GOAL, `歩数 ${num(steps)} / ${num(STEP_GOAL)}`]]);
+    const steps = totals[todayKey].steps, night = nights[todayKey], profile = summary?.profile;
+    const bp = latest('blood_pressure'), weight = latest('body_composition');
+    const bpHigh = !!(bp && profile && (bp.values.systolic > profile.bp_sys_high || bp.values.diastolic > profile.bp_dia_high));
+    const today = energyBalance(energy?.current?.bmr, totals[todayKey].active_energy, energy?.current?.intake_kcal);
+    const tick = v => v ? '✓' : '';
+    renderSummary([
+      {label: '体重', value: weight ? num(weight.values.weight, 1) : '—', unit: 'kg', mark: tick(measuredToday('body_composition')),
+        sub: diet?.remaining != null ? (diet.remaining <= 0 ? '目標に到達' : `目標まで ${num(diet.remaining, 1)} kg`) : measuredToday('body_composition') ? '今日測定済み' : '今日は未測定',
+        state: measuredToday('body_composition') ? 'done' : ''},
+      {label: '血圧', value: bp ? `${bp.values.systolic}/${bp.values.diastolic}` : '—', unit: 'mmHg', mark: tick(measuredToday('blood_pressure')),
+        sub: bpHigh ? '参考上限を超えています' : measuredToday('blood_pressure') ? '今日測定済み' : '今日は未測定', state: bpHigh ? 'warn' : measuredToday('blood_pressure') ? 'done' : ''},
+      {label: '歩数', value: num(steps), unit: '歩', mark: tick(steps != null && steps >= STEP_GOAL),
+        sub: `目標 ${num(STEP_GOAL)}${steps != null ? `（${Math.min(999, Math.round(steps/STEP_GOAL*100))}%）` : ''}`, state: steps != null && steps >= STEP_GOAL ? 'done' : ''},
+      {label: '睡眠', value: night ? hm(night.total).replace('時間', 'h').replace('分', 'm') : '—', unit: '', mark: tick(!!night),
+        sub: night ? (sleptDays.length > 1 ? `平均 ${hm(sleepAvg)}` : '昨夜の記録') : '記録なし', state: night ? 'done' : ''},
+      {label: '収支', value: today.balance == null ? '—' : `${today.balance > 0 ? '+' : today.balance < 0 ? '−' : '±'}${num(Math.abs(today.balance))}`, unit: 'kcal',
+        sub: today.basis === 'bmr+active' ? '摂取−基礎代謝−活動' : today.basis === 'bmr' ? '摂取−基礎代謝' : '設定が必要', state: today.balance == null ? '' : today.balance <= 0 ? 'good' : 'warn'}
+    ], summaryText({remaining: diet?.remaining ?? null, change7: diet?.change7 ?? null, bpHigh, steps, stepGoal: STEP_GOAL,
+      sleep: night?.total ?? null, sleepAvg: sleptDays.length > 1 ? sleepAvg : null, balance: today.balance}));
   }
   $('home-goal-form').addEventListener('submit', async event => {
     event.preventDefault();
