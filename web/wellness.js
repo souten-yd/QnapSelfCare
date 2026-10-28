@@ -192,15 +192,26 @@ function renderAdviceEntry(target,item){
    const rawBtn=element('button','生成原文を一時取得','secondary');
    rawBtn.type='button';
    const output=element('pre',undefined,'diagnostic-raw');output.hidden=true;
+   const rawDownload=element('button','原文をJSON保存（個人情報を含む可能性あり）','secondary');
+   rawDownload.type='button';rawDownload.hidden=true;
+   let captured=null;
+   rawDownload.addEventListener('click',()=>{
+    if(!captured)return;
+    const blob=new Blob([JSON.stringify(captured,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob),link=document.createElement('a');
+    link.href=url;link.download='selfcare-ai-raw-'+item.day+'.json';link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+   });
    rawBtn.addEventListener('click',async()=>{
     rawBtn.disabled=true;
     try{
      const result=await api('/api/wellness/advice/diagnostics/raw',{user_id:$('current-user').value,day:item.day});
      output.textContent=result.raw_output||'生成済み原文はありません。';output.hidden=false;
+     if(result.raw_output){captured={day:item.day,diagnostics:result.diagnostics,raw_output:result.raw_output,warning:result.warning};rawDownload.hidden=false;}
     }catch(e){output.textContent='取得できません：'+e.message+'（QnapAssistantの短期保持期限は15分です）';output.hidden=false;}
     finally{rawBtn.disabled=false;}
    });
-   actions.append(rawBtn);details.append(actions,output);
+   actions.append(rawBtn,rawDownload);details.append(actions,output);
   }else details.append(actions);
   target.append(details);
  }
