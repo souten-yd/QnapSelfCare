@@ -1,0 +1,301 @@
+'use strict';
+/* Home dashboard: today's checks, diet progress, activity and sleep at a glance. */
+(() => {
+  const STEP_GOAL = 8000;
+  const DAY = 86400000;
+  const SLEEP_STAGES = ['deep', 'core', 'rem', 'asleep_unspecified'];
+  const STAGE_NAMES = {deep: '深い', core: 'コア', rem: 'レム', asleep_unspecified: '睡眠'};
+
+  // ---- Pure calculations (exported for Node tests) ----
+  function dayKey(t) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+  function dayStart(key) { return +new Date(key + 'T00:00:00'); }
+  function lastDays(today, count) { const out = []; const base = new Date(today + 'T12:00:00'); for (let i = count-1; i >= 0; i--) { const d = new Date(base); d.setDate(d.getDate()-i); out.push(dayKey(d)); } return out; }
+  function union(intervals) { let end = -Infinity, total = 0; for (const [a, b] of [...intervals].sort((x, y) => x[0]-y[0])) { total += Math.max(0, b-Math.max(a, end)); end = Math.max(end, b); } return total; }
+  // Several sources (watch + phone) record the same steps; count only the busiest one.
+  function mainSource(rows) { const counts = new Map(); for (const r of rows) counts.set(r.source, (counts.get(r.source) || 0)+1); let best = null, n = 0; for (const [s, c] of counts) if (c > n) { best = s; n = c; } return best; }
+  function dailyTotals(rows, days) {
+    const out = Object.fromEntries(days.map(d => [d, {steps: null, distance: null, active_energy: null, heart: [], oxygen: []}]));
+    for (const r of rows) {
+      const slot = out[dayKey(Date.parse(r.start_at))]; if (!slot) continue;
+      if (r.metric === 'steps') slot.steps = (slot.steps || 0) + r.value;
+      else if (r.metric === 'walking_running_distance') slot.distance = (slot.distance || 0) + r.value/1000;
+      else if (r.metric === 'active_energy') slot.active_energy = (slot.active_energy || 0) + r.value;
+      else if (r.metric === 'heart_rate') slot.heart.push(r.value);
+      else if (r.metric === 'oxygen_saturation') slot.oxygen.push(r.value);
+    }
+    return out;
+  }
+  // Sleep for day D is what overlaps 18:00 of D-1 to 18:00 of D, excluding awake and in-bed time.
+  function sleepFor(rows, key) {
+    const b = dayStart(key) + 18*3600000, a = b - DAY;
+    const list = rows.filter(r => r.metric === 'sleep' && Date.parse(r.end_at) > a && Date.parse(r.start_at) < b);
+    const clip = r => [Math.max(a, Date.parse(r.start_at)), Math.min(b, Date.parse(r.end_at))];
+    const asleep = list.filter(r => SLEEP_STAGES.includes(r.value));
+    if (!asleep.length) return null;
+    const stages = Object.fromEntries(SLEEP_STAGES.map(s => [s, union(asleep.filter(r => r.value === s).map(clip))]));
+    const times = asleep.map(clip);
+    return {total: union(times), stages, start: Math.min(...times.map(t => t[0])), end: Math.max(...times.map(t => t[1]))};
+  }
+  function dietProgress(weights, plan, goalWeight) {
+    const known = weights.filter(w => Number.isFinite(w.weight));
+    if (!known.length) return null;
+    const current = known.at(-1);
+    const start = plan ? {date: plan.start_date, weight: plan.start_weight} : {date: known[0].date, weight: known[0].weight};
+    const goal = plan ? plan.goal_weight : goalWeight;
+    const result = {current: current.weight, current_date: current.date, start: start.weight, start_date: start.date, goal: goal ?? null,
+      goal_date: plan?.goal_date || null, remaining: null, percent: null, change7: null};
+    if (Number.isFinite(goal)) {
+      result.remaining = Math.round((current.weight-goal)*10)/10;
+      const span = start.weight-goal;
+      if (span > 0) result.percent = Math.max(0, Math.min(100, Math.round((start.weight-current.weight)/span*100)));
+    }
+    const weekAgo = new Date(Date.parse(current.date+'T00:00:00Z')-7*DAY).toISOString().slice(0, 10);
+    const before = known.filter(w => w.date <= weekAgo).at(-1);
+    if (before) result.change7 = Math.round((current.weight-before.weight)*10)/10;
+    return result;
+  }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress}; return; }
+
+  // ---- Rendering ----
+  const $ = id => document.getElementById(id);
+  const NS = 'http://www.w3.org/2000/svg';
+  function el(tag, text, cls) { const n = document.createElement(tag); if (text !== undefined && text !== null) n.textContent = text; if (cls) n.className = cls; return n; }
+  function svg(tag, attrs, text) { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v)); if (text !== undefined) n.textContent = text; return n; }
+  const num = (v, digits = 0) => v == null || !Number.isFinite(v) ? '—' : Number(v).toLocaleString('ja-JP', {minimumFractionDigits: digits, maximumFractionDigits: digits});
+  const hm = ms => ms == null ? '—' : `${Math.floor(ms/3600000)}時間${String(Math.round(ms/60000)%60).padStart(2, '0')}分`;
+  const clock = t => new Date(t).toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
+  const short = key => { const d = new Date(key+'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; };
+  const weekday = key => '日月火水木金土'[new Date(key+'T12:00:00').getDay()];
+  function stat(label, value, unit, note, cls) { const box = el('div', undefined, 'home-stat'+(cls ? ' '+cls : '')); box.append(el('span', label)); const v = el('strong', value); if (unit) v.append(el('small', ' '+unit)); box.append(v); if (note) box.append(el('small', note)); return box; }
+  function empty(target, text) { target.replaceChildren(el('p', text, 'home-empty')); }
+
+  function ring(percent, color, center, sub) {
+    const box = el('div', undefined, 'home-ring');
+    const g = svg('svg', {viewBox: '0 0 120 120', role: 'img', 'aria-label': `${center} ${sub || ''}`.trim()});
+    const r = 50, c = 2*Math.PI*r, p = Math.max(0, Math.min(100, percent ?? 0));
+    g.append(svg('circle', {cx: 60, cy: 60, r, fill: 'none', stroke: 'var(--ring-track)', 'stroke-width': 11}));
+    g.append(svg('circle', {cx: 60, cy: 60, r, fill: 'none', stroke: color, 'stroke-width': 11, 'stroke-linecap': 'round',
+      'stroke-dasharray': `${c*p/100} ${c}`, transform: 'rotate(-90 60 60)'}));
+    box.append(g);
+    const label = el('div', undefined, 'home-ring-label'); label.append(el('strong', center)); if (sub) label.append(el('small', sub)); box.append(label);
+    return box;
+  }
+
+  function checks(items) {
+    const list = $('home-checks'); list.replaceChildren();
+    for (const [done, text] of items) { const li = el('li', undefined, done ? 'done' : ''); li.append(el('span', done ? '✓' : '・', 'mark'), el('span', text)); list.append(li); }
+  }
+
+  function sparkline(weights, plan, goal) {
+    const pts = weights.filter(w => Number.isFinite(w.weight));
+    if (pts.length < 2) return el('p', '推移を描くには2日以上の記録が必要です。', 'home-empty');
+    const W = 320, H = 96, pad = 6;
+    const times = pts.map(p => Date.parse(p.date+'T00:00:00Z'));
+    const t0 = times[0], t1 = Math.max(times.at(-1), t0+DAY);
+    const planLine = plan ? [[Date.parse(plan.start_date+'T00:00:00Z'), plan.start_weight], [Date.parse(plan.goal_date+'T00:00:00Z'), plan.goal_weight]] : null;
+    const vals = pts.map(p => p.weight).concat(Number.isFinite(goal) ? [goal] : []);
+    const lo = Math.min(...vals)-0.3, hi = Math.max(...vals)+0.3;
+    const x = t => pad+(t-t0)/(t1-t0)*(W-2*pad), y = v => H-pad-(v-lo)/(hi-lo)*(H-2*pad);
+    const g = svg('svg', {viewBox: `0 0 ${W} ${H}`, class: 'home-spark', role: 'img', 'aria-label': `直近${pts.length}日の体重推移`, preserveAspectRatio: 'none'});
+    const defs = svg('defs', {}); const grad = svg('linearGradient', {id: 'home-spark-fill', x1: 0, x2: 0, y1: 0, y2: 1});
+    grad.append(svg('stop', {offset: '0%', 'stop-color': 'var(--chart-primary)', 'stop-opacity': .28}), svg('stop', {offset: '100%', 'stop-color': 'var(--chart-primary)', 'stop-opacity': 0}));
+    defs.append(grad); g.append(defs);
+    if (Number.isFinite(goal)) g.append(svg('line', {x1: pad, x2: W-pad, y1: y(goal), y2: y(goal), stroke: 'var(--energy-target)', 'stroke-dasharray': '4 4', 'stroke-width': 1}));
+    if (planLine) {
+      // Interpolate the plan line within the visible window only.
+      const at = t => planLine[0][1]+(planLine[1][1]-planLine[0][1])*(t-planLine[0][0])/Math.max(DAY, planLine[1][0]-planLine[0][0]);
+      const a = Math.max(t0, planLine[0][0]), b = Math.min(t1, planLine[1][0]);
+      if (b > a) g.append(svg('line', {x1: x(a), x2: x(b), y1: y(at(a)), y2: y(at(b)), stroke: 'var(--chart-secondary)', 'stroke-width': 1.5, 'stroke-dasharray': '2 3'}));
+    }
+    const line = pts.map((p, i) => `${x(times[i]).toFixed(1)},${y(p.weight).toFixed(1)}`);
+    g.append(svg('path', {d: `M${line[0]} L${line.join(' L')} L${x(times.at(-1)).toFixed(1)},${H} L${x(times[0]).toFixed(1)},${H} Z`, fill: 'url(#home-spark-fill)'}));
+    g.append(svg('polyline', {points: line.join(' '), fill: 'none', stroke: 'var(--chart-primary)', 'stroke-width': 2.2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'vector-effect': 'non-scaling-stroke'}));
+    const wrap = el('div', undefined, 'home-spark-wrap'); wrap.append(g);
+    const legend = el('div', undefined, 'home-legend');
+    legend.append(el('span', `${short(pts[0].date)}〜${short(pts.at(-1).date)}`, 'muted'));
+    if (planLine) legend.append(el('span', '┄ 計画線', 'plan'));
+    if (Number.isFinite(goal)) legend.append(el('span', '┄ 目標', 'goal'));
+    wrap.append(legend);
+    return wrap;
+  }
+
+  function renderDiet(energy, summary) {
+    const target = $('home-diet');
+    if (!energy || !summary) { empty(target, '体重を記録すると、目標までの進み具合を表示します。'); return null; }
+    const weights = energy.history.filter(h => h.weight != null).map(h => ({date: h.date, weight: h.weight}));
+    const recent = weights.filter(w => w.date >= new Date(Date.parse(energy.today+'T00:00:00Z')-90*DAY).toISOString().slice(0, 10));
+    const plan = energy.active_plan || null;
+    const p = dietProgress(recent.length ? recent : weights, plan, summary.goal_weight_kg);
+    if (!p) { empty(target, '体重を記録すると、目標までの進み具合を表示します。'); return null; }
+    const head = el('div', undefined, 'home-diet-head');
+    head.append(ring(p.percent, 'var(--chart-primary)', p.percent == null ? '—' : p.percent+'%', p.percent == null ? '目標未設定' : '達成'));
+    const main = el('div', undefined, 'home-diet-main');
+    const now = el('div', undefined, 'home-big'); now.append(el('strong', num(p.current, 1)), el('span', 'kg'));
+    main.append(el('span', '現在の体重', 'home-label'), now, el('small', `${p.current_date.replaceAll('-', '/')} 時点`, 'muted'));
+    head.append(main); target.replaceChildren(head);
+    const daysLeft = p.goal_date ? Math.round((Date.parse(p.goal_date+'T00:00:00Z')-Date.parse(energy.today+'T00:00:00Z'))/DAY) : null;
+    const change = p.change7 == null ? '—' : (p.change7 > 0 ? '+' : '')+num(p.change7, 1);
+    const grid = el('div', undefined, 'home-stats');
+    grid.append(stat('目標', num(p.goal, 1), p.goal == null ? '' : 'kg', p.goal == null ? '健康サポートで設定' : `開始 ${num(p.start, 1)} kg`),
+      stat('残り', p.remaining == null ? '—' : num(Math.max(0, p.remaining), 1), p.remaining == null ? '' : 'kg', p.remaining != null && p.remaining <= 0 ? '目標に到達' : ''),
+      stat('7日間の変化', change, p.change7 == null ? '' : 'kg', '', p.change7 == null ? '' : p.change7 <= 0 ? 'good' : 'warn'),
+      stat('目標日まで', daysLeft == null ? '—' : num(Math.max(0, daysLeft)), daysLeft == null ? '' : '日', p.goal_date ? p.goal_date.replaceAll('-', '/') : '計画未設定'));
+    target.append(grid);
+    const week = (energy.weeks || []).find(w => w.partial);
+    if (week && week.actual != null) {
+      const dev = week.deviation;
+      target.append(el('p', `今週の平均 ${num(week.actual, 1)} kg（計画 ${num(week.planned, 1)} kg、${dev > 0 ? '+' : ''}${num(dev, 1)} kg）`, 'home-note '+(dev < 0.05 ? 'good' : 'warn')));
+    }
+    target.append(sparkline(recent.slice(-30), plan, p.goal));
+    return p;
+  }
+
+  function renderActivity(today, todayEntry) {
+    const target = $('home-activity'); target.replaceChildren();
+    const steps = today?.steps;
+    const row = el('div', undefined, 'home-activity-row');
+    row.append(ring(steps == null ? 0 : steps/STEP_GOAL*100, 'var(--activity)', num(steps), `/ ${num(STEP_GOAL)} 歩`));
+    const stats = el('div', undefined, 'home-stats home-stats-tight');
+    stats.append(stat('活動エネルギー', num(today?.active_energy), today?.active_energy == null ? '' : 'kcal'),
+      stat('距離', num(today?.distance, 2), today?.distance == null ? '' : 'km'),
+      stat('運動時間', num(todayEntry?.minutes), todayEntry?.minutes == null ? '' : '分', todayEntry?.source === 'routine' ? 'いつもの設定' : ''));
+    row.append(stats); target.append(row);
+    if (steps == null) target.append(el('p', 'ウォッチ・ヘルスケアの記録はまだありません。記録なしはゼロではありません。', 'home-empty'));
+    else if (steps >= STEP_GOAL) target.append(el('p', '歩数の目安を達成しました。', 'home-note good'));
+    else target.append(el('p', `目安まであと ${num(STEP_GOAL-steps)} 歩`, 'home-note'));
+  }
+
+  function renderSleep(night, average) {
+    const target = $('home-sleep');
+    if (!night) { empty(target, '昨夜の睡眠記録はありません。'); return; }
+    target.replaceChildren();
+    const big = el('div', undefined, 'home-big'); big.append(el('strong', `${Math.floor(night.total/3600000)}`), el('span', '時間'), el('strong', String(Math.round(night.total/60000)%60).padStart(2, '0')), el('span', '分'));
+    target.append(big, el('small', `${clock(night.start)} 〜 ${clock(night.end)}`, 'muted'));
+    const bar = el('div', undefined, 'home-stage-bar'), legend = el('div', undefined, 'home-legend');
+    for (const s of SLEEP_STAGES) {
+      const ms = night.stages[s]; if (!ms) continue;
+      const seg = el('span', undefined, 'stage-'+s); seg.style.flexGrow = String(ms); seg.title = `${STAGE_NAMES[s]} ${hm(ms)}`; bar.append(seg);
+      const item = el('span', `${STAGE_NAMES[s]} ${hm(ms)}`, 'stage-label stage-'+s); legend.append(item);
+    }
+    target.append(bar, legend);
+    if (average != null) { const diff = night.total-average; target.append(el('p', `7日平均 ${hm(average)}（${diff >= 0 ? '+' : '−'}${Math.round(Math.abs(diff)/60000)}分）`, 'home-note')); }
+  }
+
+  function renderHeart(today) {
+    const target = $('home-heart');
+    const hr = today?.heart || [], ox = today?.oxygen || [];
+    if (!hr.length && !ox.length) { empty(target, '今日の心拍・血中酸素の記録はありません。'); return; }
+    target.replaceChildren();
+    const avg = list => list.reduce((a, b) => a+b, 0)/list.length;
+    const grid = el('div', undefined, 'home-stats home-stats-tight');
+    grid.append(stat('平均心拍', hr.length ? num(avg(hr)) : '—', hr.length ? 'bpm' : '', hr.length ? `${num(Math.min(...hr))}〜${num(Math.max(...hr))} bpm` : ''),
+      stat('血中酸素', ox.length ? num(avg(ox)) : '—', ox.length ? '%' : '', ox.length ? `${ox.length}件の平均` : ''));
+    target.append(grid, el('p', '記録値の単純平均です。', 'home-foot'));
+  }
+
+  function renderEnergy(energy) {
+    const target = $('home-energy');
+    const c = energy?.current;
+    if (!c) { empty(target, '身長・年齢などを設定すると推定値を表示します。'); return; }
+    target.replaceChildren();
+    const intake = c.intake_kcal, goal = c.target_kcal, total = c.total_kcal;
+    const big = el('div', undefined, 'home-big'); big.append(el('strong', num(intake)), el('span', `/ ${num(goal)} kcal`));
+    target.append(el('span', '摂取 / 摂取目標', 'home-label'), big);
+    if (intake != null && goal) {
+      const meter = el('div', undefined, 'home-meter'); const fill = el('span'); const ratio = intake/goal;
+      fill.style.width = Math.min(100, ratio*100)+'%'; if (ratio > 1.05) fill.className = 'over'; meter.append(fill); target.append(meter);
+    }
+    const grid = el('div', undefined, 'home-stats home-stats-tight');
+    const balance = intake != null && total != null ? intake-total : null;
+    grid.append(stat('推定総消費', num(total), total == null ? '' : 'kcal'),
+      stat('収支', balance == null ? '—' : (balance > 0 ? '+' : '')+num(balance), balance == null ? '' : 'kcal', '', balance == null ? '' : balance <= 0 ? 'good' : 'warn'));
+    target.append(grid, el('p', c.source === 'routine' ? '摂取はいつもの設定の値です。' : c.source === 'entered' ? '摂取は今日の入力値です。' : '今日の摂取は未入力です。', 'home-foot'));
+  }
+
+  function bars(target, days, values, opts) {
+    target.replaceChildren();
+    if (values.every(v => v == null)) { target.append(el('p', opts.empty, 'home-empty')); return; }
+    const W = 340, H = 150, top = 14, bottom = 26, gap = 10, bw = (W-gap*(days.length+1))/days.length;
+    const totals = values.map(v => v == null ? 0 : opts.total(v));
+    const max = Math.max(opts.goal || 0, ...totals)*1.1 || 1;
+    const y = v => H-bottom-(v/max)*(H-top-bottom);
+    const g = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': opts.label});
+    if (opts.goal) { g.append(svg('line', {x1: 0, x2: W, y1: y(opts.goal), y2: y(opts.goal), stroke: 'var(--chart-limit)', 'stroke-dasharray': '4 4'})); }
+    days.forEach((d, i) => {
+      const x = gap+i*(bw+gap), v = values[i], isToday = i === days.length-1;
+      if (v == null) g.append(svg('rect', {x, y: H-bottom-3, width: bw, height: 3, rx: 1.5, fill: 'var(--chart-grid)'}));
+      else {
+        let base = H-bottom;
+        for (const part of opts.parts(v)) {
+          const h = (part.value/max)*(H-top-bottom); if (h <= 0) continue;
+          const r = svg('rect', {x, y: base-h, width: bw, height: h, rx: 3, fill: part.color, opacity: isToday || opts.stacked ? 1 : .78});
+          r.append(svg('title', {}, `${short(d)} ${part.title}`)); g.append(r); base -= h;
+        }
+        g.append(svg('text', {x: x+bw/2, y: base-4, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--chart-label)'}, opts.short(v)));
+      }
+      g.append(svg('text', {x: x+bw/2, y: H-8, 'text-anchor': 'middle', 'font-size': 11, fill: isToday ? 'var(--text)' : 'var(--chart-label)', 'font-weight': isToday ? 700 : 400}, isToday ? '今日' : weekday(d)));
+    });
+    target.append(g);
+    const legend = opts.legend || el('div', undefined, 'home-legend');
+    if (opts.goal) legend.append(el('span', '┄ '+opts.goalLabel, 'goal-line'));
+    target.append(legend);
+  }
+
+  let serial = 0;
+  async function fetchSamples(user, since, until) {
+    const all = []; let total = 0;
+    do {
+      const p = new URLSearchParams({user_id: user, since: new Date(since).toISOString(), until: new Date(until).toISOString(), limit: '1000', offset: String(all.length)});
+      const response = await fetch('/api/apple-health/samples?'+p, {cache: 'no-store'}); const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'ヘルスケアの記録を取得できません');
+      total = data.total; if (!data.samples.length) break; all.push(...data.samples);
+    } while (all.length < total && all.length < 20000);
+    return all;
+  }
+
+  function greeting(now) { const h = now.getHours(); return h < 4 ? 'こんばんは' : h < 11 ? 'おはようございます' : h < 18 ? 'こんにちは' : 'こんばんは'; }
+
+  async function refreshHome() {
+    const ticket = ++serial, now = new Date(), userId = $('current-user')?.value;
+    $('home-date').textContent = now.toLocaleDateString('ja-JP', {month: 'long', day: 'numeric', weekday: 'short'}).toUpperCase();
+    const name = userId ? (typeof currentUserName === 'function' ? currentUserName(userId) : '') : '';
+    $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
+    if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
+    for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week']) if (!userId) empty($(id), '利用者を選択してください。');
+    if (!userId) { checks([]); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; return; }
+    const todayKey = dayKey(now), days = lastDays(todayKey, 7);
+    let rows = [], error = null;
+    try { rows = await fetchSamples(userId, dayStart(days[0])-6*3600000, dayStart(todayKey)+DAY); } catch (e) { error = e; }
+    if (ticket !== serial) return;
+    const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
+    const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));
+    const totals = dailyTotals(rows.filter(r => r.source === source), days);
+    const nights = Object.fromEntries(days.map(d => [d, sleepFor(rows.filter(r => r.source === sleepSource), d)]));
+    const energy = typeof energyData !== 'undefined' && wellnessProfileUser === userId ? energyData : null;
+    const summary = typeof wellnessSummaryData !== 'undefined' && wellnessProfileUser === userId ? wellnessSummaryData : null;
+    const todayEntry = energy ? (energy.entries || energy.diaries || []).find(x => x.date === energy.today) : null;
+    $('home-source').textContent = error ? error.message : source ? `記録元：${source === 'unknown' ? '不明' : source}` : '';
+    renderDiet(energy, summary);
+    renderActivity(totals[todayKey], todayEntry);
+    const sleptDays = days.filter(d => nights[d]);
+    const sleepAvg = sleptDays.length ? sleptDays.reduce((a, d) => a+nights[d].total, 0)/sleptDays.length : null;
+    renderSleep(nights[todayKey], sleptDays.length > 1 ? sleepAvg : null);
+    renderHeart(totals[todayKey]);
+    renderEnergy(energy);
+    const stepDays = days.filter(d => totals[d].steps != null && d !== todayKey);
+    $('home-steps-avg').textContent = stepDays.length ? `1日平均 ${num(stepDays.reduce((a, d) => a+totals[d].steps, 0)/stepDays.length)} 歩` : '';
+    $('home-sleep-avg').textContent = sleepAvg == null ? '' : `平均 ${hm(sleepAvg)}`;
+    bars($('home-steps-week'), days, days.map(d => totals[d].steps), {label: '直近7日の歩数', empty: '歩数の記録はありません。', goal: STEP_GOAL, goalLabel: '目安 8,000',
+      total: v => v, parts: v => [{value: v, color: v >= STEP_GOAL ? 'var(--activity)' : 'var(--activity-soft)', title: `${num(v)} 歩`}], short: v => v >= 1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v))});
+    const legend = el('div', undefined, 'home-legend'); for (const s of ['deep', 'core', 'rem']) legend.append(el('span', STAGE_NAMES[s], 'stage-label stage-'+s));
+    bars($('home-sleep-week'), days, days.map(d => nights[d]), {label: '直近7日の睡眠時間', empty: '睡眠の記録はありません。', goal: 7*3600000, goalLabel: '7時間', stacked: true, legend,
+      total: v => v.total, parts: v => SLEEP_STAGES.map(s => ({value: v.stages[s], color: `var(--sleep-${s})`, title: `${STAGE_NAMES[s]} ${hm(v.stages[s])}`})), short: v => (v.total/3600000).toFixed(1)+'h'});
+    const latest = kind => (typeof chartRecords !== 'undefined' ? chartRecords : []).find(r => r.kind === kind && r.user_id === userId);
+    const measuredToday = kind => { const r = latest(kind); return !!r && dayKey(Date.parse(r.measured_at)) === todayKey; };
+    const steps = totals[todayKey].steps;
+    checks([[measuredToday('body_composition'), '体重'], [measuredToday('blood_pressure'), '血圧'],
+      [!!nights[todayKey], nights[todayKey] ? `睡眠 ${hm(nights[todayKey].total)}` : '睡眠'],
+      [steps != null && steps >= STEP_GOAL, `歩数 ${num(steps)} / ${num(STEP_GOAL)}`]]);
+  }
+  window.refreshHome = refreshHome;
+})();
