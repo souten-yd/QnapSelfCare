@@ -171,6 +171,39 @@ function renderAdviceEntry(target,item){
  if(item.review){target.append(renderReview(item.review));if(item.review.notes?.length){const ul=element('ul',undefined,'advice-notes');item.review.notes.forEach(n=>ul.append(element('li',n)));target.append(ul);}}
  if(item.answer){const box=element('div',undefined,'ai-answer');renderMarkdown(box,item.answer);target.append(box);}
  if(item.error)target.append(element('p',item.error,'notice'+(item.status==='failed'?' error':'')));
+ if(item.diagnostics){
+  const diag=item.diagnostics,details=element('details',undefined,'advice-diagnostic');
+  details.append(element('summary','AI実行診断・原因解析'));
+  if(diag.diagnosis)details.append(element('p',diag.diagnosis,'notice'));
+  if(diag.recommendation)details.append(element('p',diag.recommendation,'muted'));
+  if(diag.format_warnings?.length)details.append(element('p','回答形式の注意：'+diag.format_warnings.join('／'),'notice'));
+  const meta={...diag};delete meta.diagnostic_job_id;delete meta.request_id;
+  details.append(element('pre',JSON.stringify(meta,null,2),'diagnostic-json'));
+  const actions=element('div',undefined,'row');
+  const exportBtn=element('button','診断要約をJSONで保存','secondary');
+  exportBtn.type='button';
+  exportBtn.addEventListener('click',()=>{
+   const blob=new Blob([JSON.stringify({day:item.day,diagnostics:meta},null,2)],{type:'application/json'});
+   const url=URL.createObjectURL(blob),a=document.createElement('a');
+   a.href=url;a.download='selfcare-ai-diagnostic-'+item.day+'.json';a.click();
+   setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });actions.append(exportBtn);
+  if(diag.raw_output_available){
+   const rawBtn=element('button','生成原文を一時取得','secondary');
+   rawBtn.type='button';
+   const output=element('pre',undefined,'diagnostic-raw');output.hidden=true;
+   rawBtn.addEventListener('click',async()=>{
+    rawBtn.disabled=true;
+    try{
+     const result=await api('/api/wellness/advice/diagnostics/raw',{user_id:$('current-user').value,day:item.day});
+     output.textContent=result.raw_output||'生成済み原文はありません。';output.hidden=false;
+    }catch(e){output.textContent='取得できません：'+e.message+'（QnapAssistantの短期保持期限は15分です）';output.hidden=false;}
+    finally{rawBtn.disabled=false;}
+   });
+   actions.append(rawBtn);details.append(actions,output);
+  }else details.append(actions);
+  target.append(details);
+ }
  target.append(element('small',`更新 ${new Date(item.updated_at).toLocaleString('ja-JP')}${item.trigger==='schedule'?'・自動作成':'・手動作成'}`,'muted'));
 }
 async function refreshAdvice(userId=$('current-user').value){
