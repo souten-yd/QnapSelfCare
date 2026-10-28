@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.49"
+VERSION = "0.3.50"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -143,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.server.coach.status())
         elif path == '/api/ai/daily-settings':
             self._json(200, self.server.advisor.status())
+        elif path == '/api/ai/activity':
+            self._json(200, self.server.coach.activity())
         elif path == '/api/ai/jobs/status':
             self._json(200, self.server.ai_jobs.status(query.get('id', [''])[0]))
         elif path == '/api/wellness/plan-proposals':
@@ -330,6 +332,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == '/api/ai/jobs':
                     self._json(202, self.server.ai_jobs.submit(body))
                     return
+                elif path == '/api/ai/activity/cancel':
+                    if body:
+                        raise ValueError('不要な項目があります')
+                    result = self.server.coach.cancel_current()
                 elif path == '/api/ai/jobs/cancel':
                     if set(body) != {'id'}:
                         raise ValueError('AI処理のIDを指定してください')

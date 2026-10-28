@@ -20,6 +20,7 @@ DEFAULT = {'enabled': True, 'time': '02:00', 'allow_external': False}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = 600
 POLL_SECONDS = 15
+CATCHUP_HOURS = 6   # if the NAS was off at the scheduled time, catch up only within this window
 
 
 def now_iso():
@@ -98,6 +99,9 @@ class DailyAdvisor:
                     running=self._lock.locked(), activity=self.activity)
 
     # ---- results ----
+    def _name(self, user_id):
+        return next((u['name'] for u in self.store.users() if u['id'] == user_id), '利用者')
+
     def _row(self, row):
         if not row:
             return None
@@ -150,7 +154,9 @@ class DailyAdvisor:
         config, ai = self.settings(), self.coach.settings()
         allow_ai = bool(ai['base_url']) and (ai['provider'] != 'openrouter' or config['allow_external'] or trigger == 'manual')
         try:
-            return self.reviewer.review(user_id, trigger, allow_ai=allow_ai, cancelled=self._stop.is_set, poll=POLL_SECONDS)
+            return self.reviewer.review(user_id, trigger, allow_ai=allow_ai, cancelled=self._stop.is_set,
+                                        poll=3 if trigger == 'manual' else POLL_SECONDS,
+                                        label=f'減量計画の点検（{self._name(user_id)}）', interactive=trigger == 'manual')
         except Exception:
             return None  # the advice is already stored; a failed plan check is retried next week
 
@@ -204,8 +210,10 @@ class DailyAdvisor:
                     '翌日に向けた生活・食事・運動・睡眠・減量のアドバイスをください。')
         extra = {'day_review': review, 'review_date': key}
         try:
-            answer = self.coach.ask(user_id, 'daily', question, extra=extra,
-                                    cancelled=self._stop.is_set, poll=POLL_SECONDS)['answer']
+            answer = self.coach.ask(user_id, 'daily', question, extra=extra, cancelled=self._stop.is_set,
+                                    poll=3 if trigger == 'manual' else POLL_SECONDS,
+                                    label=f'毎日のアドバイス（{self._name(user_id)}・{day.month}/{day.day}分）',
+                                    interactive=trigger == 'manual')['answer']
         except ValueError as error:
             busy = re.search(r'実行中|混雑|429', str(error))
             status = 'retry' if busy and trigger == 'schedule' and attempts < MAX_ATTEMPTS else 'failed'
@@ -226,11 +234,20 @@ class DailyAdvisor:
         if not due(moment, config['time']):
             return []
         day = target_day(moment, config['time'])
+        hour, minute = map(int, config['time'].split(':'))
+        late = moment - moment.replace(hour=hour, minute=minute, second=0, microsecond=0) > timedelta(hours=CATCHUP_HOURS)
         done = []
         for user in self.store.users():
             row = self._get(user['id'], day.isoformat())
             if row and row['status'] not in ('retry',):
                 continue
+            if late and not row:
+                # e.g. right after an update during the day: never start heavy AI work at an unexpected time
+                self._put(user['id'], day.isoformat(), status='missed', trigger='schedule',
+                          error=f"予定時刻（{config['time']}）から{CATCHUP_HOURS}時間以上過ぎていたため、自動作成を見送りました。手動で作成できます")
+                continue
+            if self.coach.interactive_waiting():
+                break  # a request from the screen is waiting; continue with the next user on the next tick
             if row and time.monotonic() < self._retry_at.get((user['id'], day.isoformat()), 0):
                 continue
             try:

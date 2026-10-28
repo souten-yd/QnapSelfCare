@@ -82,6 +82,53 @@ class AssistantRunTests(unittest.TestCase):
             self.assertTrue(done.wait(10))
 
 
+class ActivityTests(AssistantRunTests):
+    def test_activity_shows_holder_stage_and_stall_and_can_cancel(self):
+        seen = {}
+        def progress(state):
+            if state.get('status') == 'loading_model' and 'first' not in seen:
+                seen['first'] = self.coach.activity()
+                with self.coach._state:   # pretend QnapAssistant has not answered for 4 minutes
+                    self.coach._current['updated'] -= 240
+                seen['stalled'] = self.coach.activity()
+                self.coach.cancel_current()
+        with self.fake(['queued', 'loading_model'] + ['loading_model'] * 20):
+            with self.assertRaisesRegex(ValueError, 'キャンセル'):
+                self.coach.ask(self.user, 'daily', 'q', progress=progress, label='毎日のアドバイス（A・10/27分）', interactive=False)
+        first = seen['first']['current']
+        self.assertEqual((first['label'], first['stage'], first['interactive']), ('毎日のアドバイス（A・10/27分）', 'loading_model', False))
+        self.assertEqual(first['detail'], '空きRAM 4.0 GiB')
+        self.assertTrue(seen['stalled']['current']['stalled'])
+        self.assertIn('DELETE', [c[0] for c in self.calls])          # cancelled on QnapAssistant too
+        self.assertFalse(self.coach.activity()['busy'])
+        with self.assertRaisesRegex(ValueError, 'ありません'):
+            self.coach.cancel_current()
+
+    def test_nightly_yields_to_waiting_screen_request_and_screen_wait_is_limited(self):
+        with self.coach._state:
+            self.coach._interactive_waiting = 1
+        yielded = []
+        self.coach._sleep = lambda s: (yielded.append(s), setattr(self.coach, '_interactive_waiting', 0))
+        with self.fake(['completed']):
+            self.coach.ask(self.user, 'daily', 'q', interactive=False)
+        self.assertEqual(yielded[0], 5)                                # waited instead of taking the slot
+        self.coach._sleep = lambda s: None
+        self.coach._serial.acquire()
+        with self.coach._state:
+            self.coach._current = {'label': '毎日のアドバイス（A）', 'interactive': False, 'provider': 'qnapassistant', 'stage': 'generating',
+                                   'detail': None, 'started': 0, 'updated': 0, 'errors': 0, 'cancel_event': threading.Event()}
+        waits = []
+        try:
+            with patch.object(wellness_ai, 'INTERACTIVE_WAIT_SECONDS', 0):
+                with self.assertRaisesRegex(ValueError, '毎日のアドバイス（A）が0分以上'):
+                    self.coach.ask(self.user, 'health', 'q', progress=waits.append)
+        finally:
+            with self.coach._state:
+                self.coach._current = None
+            self.coach._serial.release()
+        self.assertEqual(self.coach.interactive_waiting(), 0)
+
+
 class FakeCoach:
     def __init__(self):
         self.asked = []
@@ -96,12 +143,12 @@ class FakeCoach:
     def _test_payload(self):
         return {}, {}
 
-    def ask(self, user_id, mode, question, history=None, progress=None, cancelled=None):
+    def ask(self, user_id, mode, question, history=None, progress=None, cancelled=None, **kwargs):
         progress({'status': 'loading_model', 'memory_available_bytes': 2 * 1073741824, 'stage_elapsed_seconds': 40})
         self.asked.append((mode, question, history))
         return {'answer': 'consult answer'}
 
-    def run_prompt(self, config, prompt, progress=None, cancelled=None):
+    def run_prompt(self, config, prompt, progress=None, cancelled=None, **kwargs):
         return {'answer': 'other answer'}
 
 

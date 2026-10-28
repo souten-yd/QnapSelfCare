@@ -18,7 +18,7 @@ class FakeCoach:
     def settings(self):
         return {'provider': 'local', 'base_url': self.base_url, 'model': 'auto'}
 
-    def ask(self, user_id, mode, question, extra=None, cancelled=None, poll=3):
+    def ask(self, user_id, mode, question, extra=None, cancelled=None, poll=3, **kwargs):
         self.asked.append((mode, extra))
         if isinstance(self.answer, Exception):
             raise self.answer

@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.49 >/dev/null 2>&1; then
-            echo 'Release v0.3.49 already exists; leaving it unchanged.'
+          if gh release view v0.3.50 >/dev/null 2>&1; then
+            echo 'Release v0.3.50 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.49 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.49' \
-            --notes 'Run every AI request as a background job so QnapAssistant consultations, plan analysis, meal estimates and connection tests are no longer cut off after 300 seconds; the browser shows queue, model loading and generation progress. The nightly run now also checks the weight plan and, when a review is needed, proposes safe revision options (extend the goal date, adjust intake, add exercise) with an AI explanation. The plan changes only after the user approves an option.' \
+          gh release create v0.3.50 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.50' \
+            --notes 'Show what the AI is doing: the AI tab has an AI status panel with the running task, its stage and elapsed time, the time since QnapAssistant last answered, a stall warning after 3 minutes and a cancel button; waiting requests name the task they wait for. Screen requests take priority over nightly work and give up after 60 minutes. Missed nightly runs catch up only within 6 hours of the scheduled time, so an update during the day no longer starts long AI work.' \
             --target "$GITHUB_SHA"
 

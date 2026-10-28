@@ -40,6 +40,8 @@ SYSTEM_PROMPT = (
 )
 MAX_HISTORY = 3
 ASSISTANT_DEADLINE_SECONDS = 45 * 60   # QnapAssistant defaults: load 600 s + generation 1800 s
+INTERACTIVE_WAIT_SECONDS = 60 * 60     # a request from the screen gives up after waiting this long for the AI slot
+STALL_SECONDS = 180                    # no successful QnapAssistant status for this long is shown as a warning
 
 
 def clean_history(history):
@@ -100,6 +102,9 @@ class Coach:
         self._limit = threading.BoundedSemaphore(2)
         self._serial = threading.Lock()   # one long AI run at a time (jobs, nightly advice)
         self._sleep = time.sleep
+        self._state = threading.Lock()    # guards _current / _interactive_waiting
+        self._current = None              # what holds the AI slot right now (shown on the AI tab)
+        self._interactive_waiting = 0     # screen requests waiting; nightly work yields to them
 
     def settings(self):
         with self.store.connect() as db:
@@ -311,29 +316,97 @@ class Coach:
     def test_connection(self):
         return self._complete(*self._test_payload())
 
-    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3):
+    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3,
+            label='AI相談', interactive=True):
         """Consultation without an HTTP time limit for QnapAssistant (used by background jobs)."""
         config, prompt = self._consult_payload(user_id, mode, question, history=history, extra=extra)
-        return self.run_prompt(config, prompt, progress, cancelled, poll)
+        return self.run_prompt(config, prompt, progress, cancelled, poll, label=label, interactive=interactive)
 
-    def run_prompt(self, config, prompt, progress=None, cancelled=None, poll=3):
+    def interactive_waiting(self):
+        with self._state:
+            return self._interactive_waiting
+
+    def activity(self):
+        """What is using the AI right now, how long, and when QnapAssistant last answered."""
+        now = time.monotonic()
+        with self._state:
+            current = dict(self._current) if self._current else None
+            waiting = self._interactive_waiting
+        if current:
+            current.pop('cancel_event', None)
+            current['elapsed_seconds'] = int(now - current.pop('started'))
+            current['since_update_seconds'] = int(now - current.pop('updated'))
+            current['stalled'] = current['provider'] == 'qnapassistant' and current['since_update_seconds'] >= STALL_SECONDS
+        return {'busy': current is not None, 'current': current, 'waiting_interactive': waiting,
+                'deadline_seconds': ASSISTANT_DEADLINE_SECONDS, 'stall_after_seconds': STALL_SECONDS}
+
+    def cancel_current(self):
+        """Stop whatever holds the AI slot (QnapAssistant jobs are cancelled on the NAS too)."""
+        with self._state:
+            if not self._current:
+                raise ValueError('実行中のAI処理はありません')
+            self._current['cancel_event'].set()
+            self._current['stage'] = 'cancelling'
+        return self.activity()
+
+    def run_prompt(self, config, prompt, progress=None, cancelled=None, poll=3, label='AI処理', interactive=True):
         """Run one prompt to completion. QnapAssistant uses its async job API, so model loading and long
         generation are not cut off by the 300 s HTTP timeout; other providers use the synchronous API.
-        Calls are serialised so the NAS model and the nightly advice never compete."""
+        Calls are serialised so the NAS model is never shared; nightly work (interactive=False) waits while
+        a request from the screen is waiting, and screen requests give up after INTERACTIVE_WAIT_SECONDS."""
         waited = time.monotonic()
-        while not self._serial.acquire(timeout=5):
-            if cancelled and cancelled():
-                raise ValueError('キャンセルしました')
+        if interactive:
+            with self._state:
+                self._interactive_waiting += 1
+        try:
+            while True:
+                if (interactive or not self.interactive_waiting()) and self._serial.acquire(timeout=5):
+                    break
+                if not interactive:
+                    self._sleep(5)
+                if cancelled and cancelled():
+                    raise ValueError('キャンセルしました')
+                if interactive and time.monotonic() - waited > INTERACTIVE_WAIT_SECONDS:
+                    holder = (self.activity()['current'] or {}).get('label', '前の処理')
+                    raise ValueError(f'{holder}が{INTERACTIVE_WAIT_SECONDS // 60}分以上終わらないため、この依頼を取り消しました。'
+                                     'AIタブの「AIの稼働状況」で確認・中止できます')
+                if progress:
+                    progress({'status': 'waiting', 'elapsed_seconds': int(time.monotonic() - waited),
+                              'blocking': self.activity()['current']})
+        finally:
+            if interactive:
+                with self._state:
+                    self._interactive_waiting -= 1
+        cancel_event = threading.Event()
+        now = time.monotonic()
+        with self._state:
+            self._current = {'label': label, 'interactive': interactive, 'provider': config['provider'], 'stage': 'queued',
+                             'detail': None, 'started': now, 'updated': now, 'errors': 0, 'cancel_event': cancel_event}
+        stop = lambda: cancel_event.is_set() or bool(cancelled and cancelled())
+        def track(state):
+            with self._state:
+                if self._current:
+                    self._current['stage'] = state.get('status') or self._current['stage']
+                    self._current['updated'] = time.monotonic()
+                    self._current['errors'] = 0
+                    if state.get('memory_available_bytes'):
+                        self._current['detail'] = f"空きRAM {state['memory_available_bytes'] / 1073741824:.1f} GiB"
             if progress:
-                progress({'status': 'waiting', 'elapsed_seconds': int(time.monotonic() - waited)})
+                progress(state)
         try:
             if config['provider'] != 'qnapassistant':
-                if progress:
-                    progress({'status': 'generating'})
+                track({'status': 'generating'})
                 return self._complete(config, prompt)
-            return self._run_assistant_job(config, prompt, progress, cancelled, poll)
+            return self._run_assistant_job(config, prompt, track, stop, poll)
         finally:
+            with self._state:
+                self._current = None
             self._serial.release()
+
+    def _note_error(self):
+        with self._state:
+            if self._current:
+                self._current['errors'] += 1
 
     def _run_assistant_job(self, config, prompt, progress, cancelled, poll):
         if config['model'] == 'auto':
@@ -360,6 +433,7 @@ class Coach:
                 if '見つかりません' in str(error):
                     raise  # restarted: never resubmit health data automatically
                 failures += 1
+                self._note_error()
                 if failures >= 10:
                     raise
                 continue
