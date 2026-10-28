@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.50 >/dev/null 2>&1; then
-            echo 'Release v0.3.50 already exists; leaving it unchanged.'
+          if gh release view v0.3.51 >/dev/null 2>&1; then
+            echo 'Release v0.3.51 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.50 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.50' \
-            --notes 'Show what the AI is doing: the AI tab has an AI status panel with the running task, its stage and elapsed time, the time since QnapAssistant last answered, a stall warning after 3 minutes and a cancel button; waiting requests name the task they wait for. Screen requests take priority over nightly work and give up after 60 minutes. Missed nightly runs catch up only within 6 hours of the scheduled time, so an update during the day no longer starts long AI work.' \
+          gh release create v0.3.51 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.51' \
+            --notes 'Move the AI settings (connection, API key, test and the daily advice schedule) back to the Settings page AI tab, with a link from the daily advice card. Reorder the main menu to Home, Health, Records, Devices, Settings.' \
             --target "$GITHUB_SHA"
 
