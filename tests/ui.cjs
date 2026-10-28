@@ -199,7 +199,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
    return Promise.resolve(new Response(JSON.stringify({request_id:taskID,status:'queued'}),{status:202,headers:{'Content-Type':'application/json'}}));
   if(typeof url==='string'&&url.includes('/api/ai/consult/status?')){
    stateCalls++;return Promise.resolve(new Response(JSON.stringify({
-    request_id:taskID,status:stateCalls<=2?'generating':'completed',elapsed_seconds:stateCalls*10,
+    request_id:taskID,status:stateCalls===1?'generating':'completed',elapsed_seconds:stateCalls*10,
     stage_elapsed_seconds:7,memory_available_bytes:8*1073741824
    }),{headers:{'Content-Type':'application/json'}}));
   }
@@ -211,7 +211,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
  d.getElementById('coach-form').elements.question.value='睡眠と血圧について教えて';
  submit('coach-form');
  await until(()=>w.sessionStorage.getItem('selfcare-ai-consult-job-v1')?.includes(taskID));
- await w.__testPollCoachJob();
+ await until(()=>d.getElementById('coach-progress').textContent.includes('生成中'));
  assert.match(d.getElementById('coach-progress').textContent,/生成中/);
  assert.match(d.getElementById('coach-progress').textContent,/8.00 GiB/);
  await w.__testPollCoachJob();
