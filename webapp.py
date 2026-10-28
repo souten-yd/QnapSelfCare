@@ -25,10 +25,11 @@ from protection import ProtectionManager
 from homehub_migration import MigrationManager
 from wellness_ai import Coach
 from daily_advice import DailyAdvisor
+from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.48"
+VERSION = "0.3.49"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -142,6 +143,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.server.coach.status())
         elif path == '/api/ai/daily-settings':
             self._json(200, self.server.advisor.status())
+        elif path == '/api/ai/jobs/status':
+            self._json(200, self.server.ai_jobs.status(query.get('id', [''])[0]))
+        elif path == '/api/wellness/plan-proposals':
+            data = self.server.advisor.reviewer.proposals(query.get('user_id', [''])[0])
+            data['checking'] = self.server.advisor.activity == 'plan'
+            self._json(200, data)
         elif path == '/api/wellness/advice':
             self._json(200, self.server.advisor.history(query.get('user_id', [''])[0]))
         elif path in ('/api/ai/consult/status', '/api/ai/consult/result'):
@@ -307,6 +314,26 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 elif path == '/api/ai/daily-settings':
                     result = self.server.advisor.save(body)
+                elif path == '/api/wellness/plan-proposals/check':
+                    if set(body) != {'user_id'}:
+                        raise ValueError('利用者を指定してください')
+                    self._json(202, self.server.advisor.review_plan_now(body['user_id']))
+                    return
+                elif path == '/api/wellness/plan-proposals/apply':
+                    if set(body) != {'user_id', 'proposal_id', 'option'}:
+                        raise ValueError('適用する案を指定してください')
+                    result = self.server.advisor.reviewer.apply(body['user_id'], body['proposal_id'], body['option'])
+                elif path == '/api/wellness/plan-proposals/dismiss':
+                    if set(body) != {'user_id', 'proposal_id'}:
+                        raise ValueError('見送る案を指定してください')
+                    result = self.server.advisor.reviewer.dismiss(body['user_id'], body['proposal_id'])
+                elif path == '/api/ai/jobs':
+                    self._json(202, self.server.ai_jobs.submit(body))
+                    return
+                elif path == '/api/ai/jobs/cancel':
+                    if set(body) != {'id'}:
+                        raise ValueError('AI処理のIDを指定してください')
+                    result = self.server.ai_jobs.cancel(body['id'])
                 elif path == '/api/wellness/advice/run':
                     if not {'user_id'} <= set(body) <= {'user_id', 'day'}:
                         raise ValueError('利用者を指定してください')
@@ -403,6 +430,7 @@ def serve(args):
         server.store, server.collector, server.protection = store, collector, protection
         server.coach = Coach(args.data_dir, store)
         server.advisor = DailyAdvisor(store, server.coach)
+        server.ai_jobs = AIJobs(server.coach)
         server.migration = MigrationManager(args.data_dir)
         server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
         collector.start()

@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile health_debug.py health_metrics.py daily_advice.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
+      - run: python -m py_compile health_debug.py health_metrics.py daily_advice.py ai_jobs.py plan_review.py apple_health.py storage.py omron_csv.py energy.py wellness.py wellness_ai.py collectors.py ble_protocol.py ble_worker.py ble_bridge.py updater.py self_update.py durability.py protection.py homehub_migration.py
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.48 >/dev/null 2>&1; then
-            echo 'Release v0.3.48 already exists; leaving it unchanged.'
+          if gh release view v0.3.49 >/dev/null 2>&1; then
+            echo 'Release v0.3.49 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.48 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.48' \
-            --notes 'Add daily AI advice: at a configurable time (default 2:00) SelfCare compares each user day with the previous 7 days and asks the configured AI for lifestyle and weight-loss advice, using QnapAssistant async jobs or the synchronous API. External providers need explicit permission. Add an indicators tab with explanations to the health support page, and gather all AI settings, daily advice and consultation in its AI tab. The latest advice also appears on Home.' \
+          gh release create v0.3.49 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.49' \
+            --notes 'Run every AI request as a background job so QnapAssistant consultations, plan analysis, meal estimates and connection tests are no longer cut off after 300 seconds; the browser shows queue, model loading and generation progress. The nightly run now also checks the weight plan and, when a review is needed, proposes safe revision options (extend the goal date, adjust intake, add exercise) with an AI explanation. The plan changes only after the user approves an option.' \
             --target "$GITHUB_SHA"
 

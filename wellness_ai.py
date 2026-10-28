@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import time
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -38,6 +39,7 @@ SYSTEM_PROMPT = (
     '「## 要点」（2〜3行）、「## 根拠になったデータ」（箇条書き、数値つき）、「## 提案」（すぐ試せる行動を最大3つ）、「## 注意」（必要な場合のみ）。'
 )
 MAX_HISTORY = 3
+ASSISTANT_DEADLINE_SECONDS = 45 * 60   # QnapAssistant defaults: load 600 s + generation 1800 s
 
 
 def clean_history(history):
@@ -96,6 +98,8 @@ class Coach:
         os.chmod(self.root, 0o700)
         self.store = store
         self._limit = threading.BoundedSemaphore(2)
+        self._serial = threading.Lock()   # one long AI run at a time (jobs, nightly advice)
+        self._sleep = time.sleep
 
     def settings(self):
         with self.store.connect() as db:
@@ -184,7 +188,7 @@ class Coach:
 
     def consult(self, user_id, mode, question, consent=None, history=None, extra=None):
         config, prompt = self._consult_payload(user_id, mode, question, consent, history, extra)
-        return self._complete(config, prompt)
+        return self.run_prompt(config, prompt)
 
     def _assistant_job_url(self, config, job_id=''):
         if config['provider'] != 'qnapassistant':
@@ -266,6 +270,9 @@ class Coach:
         return self._assistant_job_request(self._assistant_job_url(config, request_id), None, 'DELETE')
 
     def estimate_meal(self, payload):
+        return self.run_prompt(*self._meal_payload(payload))
+
+    def _meal_payload(self, payload):
         if not isinstance(payload, dict) or set(payload) != {'date', 'breakfast', 'lunch', 'dinner', 'snacks'}:
             raise ValueError('食事試算の項目が不正です')
         cleaned = {}
@@ -294,12 +301,89 @@ class Coach:
                       '量が不明な品目の仮定と、推定値の不確かさを簡潔に示してください。食べていない食事は追加しないでください。'},
                     {'role': 'user', 'content': json.dumps({'task':'品目別、食事別、1日合計のカロリーを文章で概算',
                        'input': cleaned}, ensure_ascii=False)}]}
-        result = self._complete(config, prompt)
-        return result
-    def test_connection(self):
+        return config, prompt
+
+    def _test_payload(self):
         config = self.settings()
-        return self._complete(config, {'model': config['model'], 'stream': False, 'max_tokens': 16,
-                              'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
+        return config, {'model': config['model'], 'stream': False, 'max_tokens': 16,
+                        'messages': [{'role': 'user', 'content': 'Reply with OK.'}]}
+
+    def test_connection(self):
+        return self._complete(*self._test_payload())
+
+    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3):
+        """Consultation without an HTTP time limit for QnapAssistant (used by background jobs)."""
+        config, prompt = self._consult_payload(user_id, mode, question, history=history, extra=extra)
+        return self.run_prompt(config, prompt, progress, cancelled, poll)
+
+    def run_prompt(self, config, prompt, progress=None, cancelled=None, poll=3):
+        """Run one prompt to completion. QnapAssistant uses its async job API, so model loading and long
+        generation are not cut off by the 300 s HTTP timeout; other providers use the synchronous API.
+        Calls are serialised so the NAS model and the nightly advice never compete."""
+        waited = time.monotonic()
+        while not self._serial.acquire(timeout=5):
+            if cancelled and cancelled():
+                raise ValueError('キャンセルしました')
+            if progress:
+                progress({'status': 'waiting', 'elapsed_seconds': int(time.monotonic() - waited)})
+        try:
+            if config['provider'] != 'qnapassistant':
+                if progress:
+                    progress({'status': 'generating'})
+                return self._complete(config, prompt)
+            return self._run_assistant_job(config, prompt, progress, cancelled, poll)
+        finally:
+            self._serial.release()
+
+    def _run_assistant_job(self, config, prompt, progress, cancelled, poll):
+        if config['model'] == 'auto':
+            prompt.pop('model', None)
+        accepted = self._assistant_job_request(self._assistant_job_url(config), prompt, 'POST')
+        request_id = accepted.get('request_id')
+        if not isinstance(request_id, str) or not re.fullmatch(r'req_[0-9a-f]{48}', request_id):
+            raise ValueError('QnapAssistantから有効な受付IDが返りませんでした')
+        url = self._assistant_job_url(config, request_id)
+        deadline = time.monotonic() + ASSISTANT_DEADLINE_SECONDS
+        failures = 0
+        while True:
+            if cancelled and cancelled():
+                self._cancel_quietly(url)
+                raise ValueError('キャンセルしました')
+            if time.monotonic() > deadline:
+                self._cancel_quietly(url)
+                raise ValueError('QnapAssistantの処理が45分以内に完了しませんでした。モデル設定とNASの空きメモリを確認してください')
+            self._sleep(poll)
+            try:
+                state = self._assistant_job_request(url)
+                failures = 0
+            except ValueError as error:
+                if '見つかりません' in str(error):
+                    raise  # restarted: never resubmit health data automatically
+                failures += 1
+                if failures >= 10:
+                    raise
+                continue
+            if progress:
+                progress(state)
+            status = state.get('status')
+            if status == 'completed':
+                data = self._assistant_job_request(url + '/result')
+                try:
+                    answer = data['choices'][0]['message']['content']
+                except (KeyError, IndexError, TypeError) as error:
+                    raise ValueError('AIの回答形式が不正です') from error
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError('AIの回答が空です')
+                return {'answer': answer[:10000], 'provider': 'qnapassistant', 'model': config['model']}
+            if status in ('failed', 'timed_out', 'cancelled'):
+                names = {'failed': '処理に失敗しました', 'timed_out': 'モデルの読込または生成が時間切れになりました', 'cancelled': 'キャンセルされました'}
+                raise ValueError('QnapAssistant: ' + names[status] + (f"（{state['error']}）" if state.get('error') else ''))
+
+    def _cancel_quietly(self, url):
+        try:
+            self._assistant_job_request(url, None, 'DELETE')
+        except ValueError:
+            pass
 
     def _complete(self, config, prompt):
         if not config['base_url']:

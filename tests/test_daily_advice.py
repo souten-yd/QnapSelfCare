@@ -12,29 +12,15 @@ class FakeCoach:
     def __init__(self, provider='local', base_url='http://localhost:8765/v1'):
         self.config = {'provider': provider, 'base_url': base_url, 'model': 'auto'}
         self.calls, self.fail = [], None
-        self.job_states = ['queued', 'generating', 'completed']
 
     def settings(self):
         return dict(self.config)
 
-    def consult(self, user_id, mode, question, extra=None):
-        self.calls.append(('consult', mode, extra))
+    def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3):
+        self.calls.append(('ask', mode, extra))
         if self.fail:
             raise ValueError(self.fail)
-        return {'answer': '## 要点\n良い1日でした'}
-
-    def start_consult(self, user_id, mode, question, extra=None):
-        self.calls.append(('start', mode, extra))
-        return {'request_id': 'req_' + '0' * 48, 'status': 'queued'}
-
-    def consult_job_status(self, request_id):
-        return {'request_id': request_id, 'status': self.job_states.pop(0)}
-
-    def consult_job_result(self, request_id):
-        return {'answer': '## 要点\nQnapAssistantの回答'}
-
-    def cancel_consult_job(self, request_id):
-        self.calls.append(('cancel', request_id))
+        return {'answer': '## 要点\n良い1日でした（' + self.config['provider'] + '）'}
 
 
 class DailyAdviceTests(unittest.TestCase):
@@ -77,7 +63,7 @@ class DailyAdviceTests(unittest.TestCase):
         self.assertEqual(rows[0]['status'], 'done')
         self.assertIn('良い1日', rows[0]['answer'])
         kind, mode, extra = self.coach.calls[0]
-        self.assertEqual((kind, mode), ('consult', 'daily'))
+        self.assertEqual((kind, mode), ('ask', 'daily'))
         self.assertEqual(extra['day_review']['date'], '2026-10-27')
         weight = next(i for i in extra['day_review']['items'] if i['id'] == 'weight')
         self.assertEqual(weight['value'], 75.0)
@@ -116,16 +102,6 @@ class DailyAdviceTests(unittest.TestCase):
         self.add_day(date(2026, 10, 26))
         self.assertEqual(self.advisor.run(self.user, date(2026, 10, 26), 'schedule')['status'], 'failed')
 
-    def test_qnapassistant_uses_async_jobs(self):
-        self.add_day(date(2026, 10, 27))
-        self.coach.config['provider'] = 'qnapassistant'
-        row = self.advisor.run(self.user, date(2026, 10, 27), 'manual')
-        self.assertEqual(row['status'], 'done')
-        self.assertIn('QnapAssistant', row['answer'])
-        self.assertEqual(self.coach.calls[0][0], 'start')
-        self.coach.job_states = ['queued', 'failed']
-        self.assertEqual(self.advisor.run(self.user, date(2026, 10, 27), 'manual')['status'], 'failed')
-
     def test_history_and_one_run_at_a_time(self):
         self.add_day(date(2026, 10, 27))
         self.advisor.run(self.user, date(2026, 10, 27), 'manual')
@@ -141,6 +117,23 @@ class DailyAdviceTests(unittest.TestCase):
             self.advisor._lock.release()
         with self.assertRaises(ValueError):
             self.advisor.history('missing')
+
+    def test_schedule_also_checks_the_plan_but_manual_advice_does_not(self):
+        calls = []
+        class Reviewer:
+            def review(self, user_id, trigger, allow_ai=True, cancelled=None, poll=3):
+                calls.append((trigger, allow_ai))
+        self.advisor.reviewer = Reviewer()
+        self.add_day(date(2026, 10, 27))
+        self.advisor.run(self.user, date(2026, 10, 27), 'manual')
+        self.assertEqual(calls, [])
+        self.now = self.now.replace(hour=2, minute=0)
+        self.advisor.save({})
+        self.advisor.run(self.user, date(2026, 10, 26), 'schedule')
+        self.assertEqual(calls, [('schedule', True)])
+        self.coach.config['provider'] = 'openrouter'           # external: plan check runs without AI
+        self.advisor.run(self.user, date(2026, 10, 25), 'schedule')
+        self.assertEqual(calls[-1], ('schedule', False))
 
     def test_restart_marks_running_rows_failed(self):
         self.add_day(date(2026, 10, 27))

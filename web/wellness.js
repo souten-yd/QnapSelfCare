@@ -9,7 +9,7 @@ async function refreshWellness(){
  if(userId!==$('current-user').value)return;
  wellnessProfile=summary.profile;wellnessProfileUser=userId;renderBmi();const form=$('wellness-form');
  for(const key of WELLNESS_FIELDS)form.elements[key].value=summary.profile[key]??'';
- renderCharts();renderEnergy(energy,summary);refreshIndicators(userId).catch(()=>{});refreshAdvice(userId).catch(()=>{});
+ renderCharts();renderEnergy(energy,summary);refreshIndicators(userId).catch(()=>{});refreshAdvice(userId).catch(()=>{});refreshProposals(userId).catch(()=>{});
  const rows={'現在の体重':summary.latest_weight==null?'—':summary.latest_weight+' kg',
   'BMI（身長から算出）':summary.bmi??'身長・体重を設定してください',
   '推定基礎代謝':summary.estimated_bmr_kcal==null?'身長・年齢・計算条件・体重を設定してください':summary.estimated_bmr_kcal+' kcal/日',
@@ -73,94 +73,64 @@ $('coach-form').addEventListener('change',e=>{if(e.target.name==='mode')renderCo
 $('coach-reset').addEventListener('click',resetCoach);
 $('coach-copy').addEventListener('click',guarded(async()=>{const text=coachTurns.at(-1)?.answer||'';try{await navigator.clipboard.writeText(text);message('回答をコピーしました');}catch{throw Error('コピーできませんでした。回答を長押しして選択してください');}}));
 renderCoachPresets();
-// The async QnapAssistant job ID is a short-lived capability. Store only the
-// opaque ID (never health inputs/responses) so a page reload can resume polling.
-const coachJobKey='selfcare-ai-consult-job-v1';
-let coachActiveJob=null,coachPollTimer=null,coachPollFailures=0;
-const coachTerminal=new Set(['completed','failed','timed_out','cancelled']);
+// ---- Background AI jobs ----
+// Every AI request runs as a SelfCare job; the browser only polls its state, so slow NAS models
+// (QnapAssistant loading and generating for many minutes) never hit an HTTP time limit.
+const AI_STAGE={waiting:'前の処理の完了を待っています',queued:'AIの順番待ち',loading_model:'モデルを読み込み中',ready:'推論の準備完了',generating:'回答を生成中'};
+const aiSleep=ms=>new Promise(r=>setTimeout(r,ms));
+function aiProgressText(s){const m=Math.floor(s.elapsed_seconds/60),sec=s.elapsed_seconds%60;return `${AI_STAGE[s.stage]||'処理中'}（経過 ${m?m+'分':''}${sec}秒）${s.detail?'・'+s.detail:''}`;}
+async function waitAiJob(id,onProgress){
+ let failures=0;
+ for(;;){
+  let s;
+  try{s=await api('/api/ai/jobs/status?id='+encodeURIComponent(id));failures=0;}
+  catch(e){if(/見つかりません/.test(e.message))throw e;failures++;onProgress?.({state:'running',stage:'queued',elapsed_seconds:0,detail:'接続を再確認しています（'+failures+'回目）'});await aiSleep(Math.min(15000,2000*failures));continue;}
+  onProgress?.(s);
+  if(s.state==='completed')return s.result;
+  if(s.state==='failed')throw Error(s.error||'AIの処理が完了しませんでした');
+  if(s.state==='cancelled')throw Error('キャンセルしました');
+  await aiSleep(2500);
+ }
+}
+async function runAiJob(body,onProgress){const job=await api('/api/ai/jobs',body);onProgress?.(job);return {id:job.id,done:waitAiJob(job.id,onProgress)};}
+// Only the opaque SelfCare job ID and the user are kept in sessionStorage so a reload can resume.
+const coachJobKey='selfcare-ai-job-v2';
+let coachActiveJob=null;
 function coachProgress(title,detail){
  $('coach-progress').hidden=false;$('coach-progress-title').textContent=title;
  $('coach-progress-text').textContent=detail;
  $('coach-cancel').hidden=!coachActiveJob;
 }
-function clearCoachJob(){
- if(coachPollTimer!==null){clearTimeout(coachPollTimer);coachPollTimer=null;}
- coachActiveJob=null;coachPollFailures=0;sessionStorage.removeItem(coachJobKey);
- $('coach-cancel').hidden=true;
-}
-function scheduleCoachPoll(delay=2500){
- if(coachPollTimer!==null)clearTimeout(coachPollTimer);
- coachPollTimer=setTimeout(()=>{coachPollTimer=null;pollCoachJob().catch(e=>coachProgress('状態の確認に失敗',e.message));},delay);
-}
-async function pollCoachJob(){
- const current=coachActiveJob;if(!current)return;
- if($('current-user').value!==current.user_id){
-  coachProgress('利用者を確認してください','別の利用者が選択されています。受付ID '+current.id+' の相談結果は表示しません。');
-  scheduleCoachPoll(4000);return;
- }
- let d;
+function clearCoachJob(){coachActiveJob=null;try{sessionStorage.removeItem(coachJobKey);}catch{}$('coach-cancel').hidden=true;}
+async function followCoachJob(job,question){
+ coachActiveJob={...job,question};try{sessionStorage.setItem(coachJobKey,JSON.stringify({id:job.id,user_id:job.user_id}));}catch{}
  try{
-  d=await api('/api/ai/consult/status?request_id='+encodeURIComponent(current.id));
-  coachPollFailures=0;
- }catch(e){
-  if(coachActiveJob!==current)return;
-  coachPollFailures++;
-  if(/受付IDが見つかりません/.test(e.message)){
-   coachProgress('処理の復旧が必要です','QnapAssistantが再起動したか、受付履歴の保存期限が切れました。'+e.message);clearCoachJob();return;
-  }
-  coachProgress('通信状態を確認中','受付ID '+current.id+' ／ 状態の照会に失敗（'+coachPollFailures+'回）。次回も再確認します。'+e.message);
-  scheduleCoachPoll(Math.min(10000,2000+coachPollFailures*1000));return;
- }
- if(coachActiveJob!==current)return;
- const names={queued:'受付済み・待機中',loading_model:'ローカルモデルのロード中',ready:'推論準備完了',generating:'回答を生成中',completed:'回答生成完了',failed:'処理失敗',timed_out:'処理タイムアウト',cancelled:'キャンセル済み'};
- const available=Number.isFinite(Number(d.memory_available_bytes))? ' ／ 空きRAM '+(Number(d.memory_available_bytes)/1073741824).toFixed(2)+' GiB':'';
- coachProgress(names[d.status]||'状態確認中','受付ID '+current.id+' ／ 経過 '+(d.elapsed_seconds??'?')+'秒 ／ 段階 '+(d.stage_elapsed_seconds??'?')+'秒'+available+(d.error?' ／ '+d.error:''));
- if(d.status==='completed'){
-  try{
-   const result=await api('/api/ai/consult/result?request_id='+encodeURIComponent(current.id));
-   if(coachActiveJob!==current||$('current-user').value!==current.user_id)return;
-   showCoachAnswer(current.question,result.answer);
-   coachProgress('回答を取得しました','受付ID '+current.id+' ／ 処理完了');clearCoachJob();
-   message('相談への回答を受け取りました');
-  }catch(e){coachProgress('回答の取得を再試行中',e.message);scheduleCoachPoll(3500);}
- }else if(coachTerminal.has(d.status)){
-  coachProgress(names[d.status]||'処理終了','受付ID '+current.id+' ／ '+(d.error||'処理は完了しませんでした'));
-  clearCoachJob();
- }else{
-  scheduleCoachPoll(2500);
- }
+  const result=await job.done;
+  if(coachActiveJob?.id!==job.id)return;
+  if($('current-user').value!==job.user_id){coachProgress('利用者を確認してください','別の利用者が選択されているため、回答は表示しません。');return;}
+  showCoachAnswer(question,result.answer);$('coach-progress').hidden=true;message('相談への回答を受け取りました');
+ }catch(e){if(coachActiveJob?.id===job.id)coachProgress('相談できませんでした',e.message);}
+ finally{if(coachActiveJob?.id===job.id)clearCoachJob();}
 }
 function resumeCoachJob(){
  if(coachActiveJob)return;
  let saved;try{saved=JSON.parse(sessionStorage.getItem(coachJobKey)||'null');}catch{return;}
- if(!saved||!/^req_[0-9a-f]{48}$/.test(saved.id)||typeof saved.user_id!=='string')return;
- if(!$('current-user').value||$('current-user').value!==saved.user_id)return;
- coachActiveJob=saved;coachProgress('相談を再接続中','受付ID '+saved.id+' の処理状況を確認します。');scheduleCoachPoll(0);
+ if(!saved||!/^job_[0-9a-f]{32}$/.test(saved.id)||typeof saved.user_id!=='string'||$('current-user').value!==saved.user_id)return;
+ coachProgress('相談を再接続中','処理状況を確認しています…');
+ followCoachJob({id:saved.id,user_id:saved.user_id,done:waitAiJob(saved.id,s=>coachProgress('AIが回答を作成中',aiProgressText(s)))},null);
 }
 $('coach-form').addEventListener('submit',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');
- if(coachActiveJob)throw Error('相談処理が進行中です。完了またはキャンセル後に再実行してください');
- const f=$('coach-form'),params={user_id,mode:coachMode(),question:f.elements.question.value};
+ if(coachActiveJob)throw Error('相談を処理中です。完了またはキャンセル後に再実行してください');
+ const f=$('coach-form'),question=f.elements.question.value,params={kind:'consult',user_id,mode:coachMode(),question};
  if(coachTurns.length)params.history=coachTurns.slice(-3).map(t=>({question:t.question,answer:t.answer.slice(0,4000)}));
- if($('ai-form').elements.provider.value!=='qnapassistant'){
-  coachProgress('同期APIで相談中','現在の相談先では従来の同期方式で実行します。');
-  const result=await api('/api/ai/consult',params);
-  showCoachAnswer(params.question,result.answer);
-  $('coach-progress').hidden=true;message('相談への回答を受け取りました');return;
- }
- coachProgress('相談を受付中','QnapAssistantへ安全に相談を送信しています…');
- const accepted=await api('/api/ai/consult/start',params);
- coachActiveJob={id:accepted.request_id,user_id,question:params.question};
- // Only the opaque ID and user are persisted; the question stays in memory.
- sessionStorage.setItem(coachJobKey,JSON.stringify({id:coachActiveJob.id,user_id}));
- coachProgress('受付済み','受付ID '+coachActiveJob.id+' ／ 状況を確認しています…');
- scheduleCoachPoll(0);
+ coachProgress('相談を受け付けています','');
+ const job=await runAiJob(params,s=>coachProgress('AIが回答を作成中',aiProgressText(s)+'。この画面を閉じても処理は続きます。'));
+ followCoachJob({...job,user_id},question);
 }));
 $('coach-cancel').addEventListener('click',guarded(async()=>{
- if(!coachActiveJob)return;
- const current=coachActiveJob;
- await api('/api/ai/consult/cancel',{request_id:current.id});
- if(coachActiveJob===current){coachProgress('キャンセル済み','受付ID '+current.id);clearCoachJob();}
+ if(!coachActiveJob)return;const current=coachActiveJob;
+ await api('/api/ai/jobs/cancel',{id:current.id});coachProgress('キャンセルしました','');clearCoachJob();
 }));
 $('coach-plan').addEventListener('click',()=>{const field=$('wellness-form').elements.plan_text;field.value=(coachTurns.at(-1)?.answer||'').slice(0,8000);selectTab('wellness','profile');field.focus();message('計画欄へコピーしました。内容を確認して保存してください');});
 async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+({controldeck:'ControlDeck',qnapassistant:'QnapAssistant',local:'ローカルLLM',openrouter:'OpenRouter'}[config.provider]||config.provider)+(config.provider==='openrouter'?'（外部サービス）':'（NAS・LAN内）');refreshAdviceSettings().catch(()=>{});}
@@ -226,8 +196,8 @@ $('ai-form').elements.provider.addEventListener('change',()=>{const f=$('ai-form
 refreshAiSettings().catch(e=>message(e.message,true));
 
 $('ai-test').addEventListener('click',guarded(async()=>{
- $('ai-test-result').textContent='接続確認中…（最大5分）';
- try{const r=await api('/api/ai/test',{});$('ai-test-result').textContent='接続成功：'+r.answer;}
+ $('ai-test-result').textContent='接続確認中…';
+ try{const job=await runAiJob({kind:'test'},s=>{$('ai-test-result').textContent='接続確認中：'+aiProgressText(s);});const r=await job.done;$('ai-test-result').textContent='接続成功：'+r.answer;}
  catch(error){$('ai-test-result').textContent=error.message;throw error;}
 }));
 
@@ -342,13 +312,58 @@ $('plan-rebase').addEventListener('click',()=>{if(!energyData)return;const f=$('
 $('plan-info').addEventListener('click',()=>{$('plan-explanation').hidden=!$('plan-explanation').hidden;});
 $('plan-ai').addEventListener('click',guarded(async()=>{
  const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');if(!energyData?.active_plan)throw Error('先に減量計画を保存してください');
- $('plan-ai-answer').hidden=false;$('plan-ai-answer').textContent='AIで計画を分析中…';
+ const box=$('plan-ai-answer');box.hidden=false;box.textContent='AIで計画を分析中…';
  const question='現在の減量計画について、目標の計画線と代謝変化を含む試算の差、plan_analysis、直近の週次実績を使って説明してください。目標達成に向け、目標日の延長、標準摂取、生活活動、標準運動の4つをどう調整できるか具体的な候補を示し、無理な減量や安全ガード下限を下回る摂取は提案しないでください。推定と実測を区別し、優先順位ではなく選択肢とトレードオフとして示してください。';
- const result=await api('/api/ai/consult',{user_id,mode:'review',question});renderMarkdown($('plan-ai-answer'),result.answer);message('AIの計画分析を受け取りました');
+ try{const job=await runAiJob({kind:'consult',user_id,mode:'review',question},s=>{box.textContent='AIで計画を分析中：'+aiProgressText(s);});const result=await job.done;renderMarkdown(box,result.answer);message('AIの計画分析を受け取りました');}
+ catch(error){box.textContent='分析できませんでした: '+error.message;throw error;}
 }));
 $('meal-estimate-form').addEventListener('submit',guarded(async()=>{
  const f=$('meal-estimate-form');const meals={date:f.elements.date.value,breakfast:f.elements.breakfast.value,lunch:f.elements.lunch.value,dinner:f.elements.dinner.value,snacks:f.elements.snacks.value};
  $('meal-estimate-result').hidden=false;$('meal-estimate-summary').textContent='AIで試算中…';
- try{const result=await api('/api/ai/meal-estimate',{meals});renderMarkdown($('meal-estimate-summary'),result.answer);}
+ try{const job=await runAiJob({kind:'meal',meals},st=>{$('meal-estimate-summary').textContent='AIで試算中：'+aiProgressText(st);});const result=await job.done;renderMarkdown($('meal-estimate-summary'),result.answer);}
  catch(error){$('meal-estimate-summary').textContent='試算できませんでした: '+error.message;throw error;}
 }));
+
+// ---- 計画の見直し提案（ユーザーの同意で適用） ----
+let proposalPoll=null;
+const PROPOSAL_STATUS={pending:'確認待ち',applied:'適用済み',dismissed:'見送り',superseded:'新しい案に置き換え',outdated:'計画変更により無効'};
+function proposalOption(p,o,userId){
+ const card=element('article',undefined,'proposal-option'+(o.id===p.recommended?' recommended':''));
+ const head=element('div',undefined,'proposal-option-head');head.append(element('strong',`案${o.id}　${o.title}`));
+ if(o.id===p.recommended)head.append(element('span',p.recommended_by==='ai'?'AIのおすすめ':'おすすめ','eval-badge good'));
+ card.append(head);
+ const ul=element('ul',undefined,'proposal-changes');o.changes.forEach(c=>ul.append(element('li',c)));card.append(ul);
+ const facts=element('dl',undefined,'proposal-facts');
+ const gap=o.projected_gap_kg;
+ for(const [k,v] of [['必要なペース',`週 ${o.weekly_loss_kg} kg（体重の${o.weekly_pct}%）`],['標準摂取',o.planned_intake_kcal==null?'—':`${Math.round(o.planned_intake_kcal).toLocaleString('ja-JP')} kcal/日`],
+  ['目標日の試算',o.projected_goal_weight==null?'—':`${o.projected_goal_weight} kg（目標との差 ${gap>0?'+':''}${gap} kg）`],['新しい目標日',o.entry.goal_date.replaceAll('-','/')]])facts.append(element('dt',k),element('dd',v));
+ card.append(facts);
+ o.warnings.forEach(w=>card.append(element('p',w,'notice error')));
+ if(p.status==='pending'){const b=element('button','この案で計画を更新');b.type='button';
+  b.addEventListener('click',guarded(async()=>{if(!confirm(`案${o.id}「${o.title}」で減量計画を更新しますか？\n\n${o.changes.join('\n')}\n\nこれまでの計画は履歴に残ります。`))return;
+   await api('/api/wellness/plan-proposals/apply',{user_id:userId,proposal_id:p.id,option:o.id});message('計画を更新しました（これまでの計画は履歴に残っています）');await refreshWellness();}));card.append(b);}
+ return card;
+}
+function renderProposal(target,p,userId){
+ target.replaceChildren();
+ const reasons=element('ul',undefined,'proposal-reasons');p.reasons.forEach(r=>reasons.append(element('li',r)));
+ target.append(element('h3','見直しが必要な理由','list-title'),reasons);
+ if(p.answer){const box=element('div',undefined,'ai-answer');renderMarkdown(box,p.answer.replace(/^\s*推奨\s*[:：].*\n?/,''));target.append(element('h3','AIの説明','list-title'),box);}
+ else target.append(element('p',p.error?`AIの説明は取得できませんでした（${p.error}）。記録から計算した案を表示しています。`:'AIを使わず、記録から計算した案を表示しています。','muted'));
+ const grid=element('div',undefined,'proposal-options');p.options.forEach(o=>grid.append(proposalOption(p,o,userId)));target.append(element('h3','修正案','list-title'),grid);
+ if(p.status==='pending'){const skip=element('button','今回は見送る','secondary');skip.type='button';
+  skip.addEventListener('click',guarded(async()=>{await api('/api/wellness/plan-proposals/dismiss',{user_id:userId,proposal_id:p.id});message('修正案を見送りました');await refreshProposals(userId);}));
+  target.append(element('p','どの案も、同意して「この案で計画を更新」を押すまで計画は変わりません。','muted'),skip);}
+}
+async function refreshProposals(userId=$('current-user').value){
+ if(!userId)return;const data=await api('/api/wellness/plan-proposals?user_id='+encodeURIComponent(userId));if(userId!==$('current-user').value)return;
+ const box=$('plan-proposal');
+ if(data.pending){renderProposal(box,data.pending,userId);$('plan-proposal-meta').textContent=`${new Date(data.pending.created_at).toLocaleString('ja-JP')}・${data.pending.trigger==='schedule'?'夜間の自動点検':'手動の点検'}`;}
+ else{box.replaceChildren(element('p',data.has_plan?(data.checking?'点検中です…（AIの回答を待っています）':'いまのところ、計画の見直しが必要な点は見つかっていません。毎日のアドバイスの時刻に、週1回まで自動で点検します。'):'減量計画を保存すると、進み具合を自動で点検します。','muted'));$('plan-proposal-meta').textContent='';}
+ $('plan-check').disabled=!data.has_plan||data.checking;
+ const hist=$('plan-proposal-history');hist.replaceChildren();
+ for(const p of data.history.filter(x=>x.status!=='pending')){const d=element('details',undefined,'coach-turn');d.append(element('summary',`${new Date(p.created_at).toLocaleDateString('ja-JP')}　${PROPOSAL_STATUS[p.status]||p.status}${p.applied_option?'（案'+p.applied_option+'）':''}`));const body=element('div');renderProposal(body,p,userId);d.append(body);hist.append(d);}
+ if(!hist.children.length)hist.append(element('p','これまでの提案はありません。','muted'));
+ if(proposalPoll)clearTimeout(proposalPoll);proposalPoll=data.checking?setTimeout(()=>refreshProposals(userId).catch(()=>{}),5000):null;
+}
+$('plan-check').addEventListener('click',guarded(async()=>{const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');await api('/api/wellness/plan-proposals/check',{user_id});message('計画の点検を開始しました。見直しが必要な場合だけ修正案を表示します');await refreshProposals(user_id);}));

@@ -13,14 +13,13 @@ import time
 
 import energy
 import health_metrics
+from plan_review import PlanReviewer
 
 JST = energy.JST
 DEFAULT = {'enabled': True, 'time': '02:00', 'allow_external': False}
 MAX_ATTEMPTS = 3
 RETRY_SECONDS = 600
 POLL_SECONDS = 15
-JOB_DEADLINE_SECONDS = 45 * 60   # QnapAssistant: load 600 s + generation 1800 s by default
-TERMINAL = {'completed', 'failed', 'timed_out', 'cancelled'}
 
 
 def now_iso():
@@ -50,8 +49,9 @@ def due(moment, scheduled):
 
 
 class DailyAdvisor:
-    def __init__(self, store, coach, clock=None, sleep=time.sleep):
+    def __init__(self, store, coach, clock=None, sleep=time.sleep, reviewer=None):
         self.store, self.coach = store, coach
+        self.reviewer = reviewer or PlanReviewer(store, coach)
         self.clock = clock or (lambda: datetime.now(JST))
         self.sleep = sleep
         self._lock = threading.Lock()        # one run at a time (QnapAssistant runs one job)
@@ -59,6 +59,7 @@ class DailyAdvisor:
         self._thread = None
         self._config = None
         self._retry_at = {}
+        self.activity = None   # 'advice' or 'plan' while something runs
 
     # ---- settings ----
     def settings(self):
@@ -94,7 +95,7 @@ class DailyAdvisor:
             blocked = '外部サービス（OpenRouter）への自動送信が許可されていないため、記録の比較だけを作成します'
         return dict(config, next_run=nxt.isoformat(timespec='minutes'), provider=provider,
                     reviews_day=target_day(nxt, config['time']).isoformat(), ai_blocked=blocked,
-                    running=self._lock.locked())
+                    running=self._lock.locked(), activity=self.activity)
 
     # ---- results ----
     def _row(self, row):
@@ -134,9 +135,39 @@ class DailyAdvisor:
         if not self._lock.acquire(blocking=False):
             raise ValueError('毎日のアドバイスを作成中です。完了してから再実行してください')
         try:
-            return self._run(user_id, day, trigger)
+            self.activity = 'advice'
+            row = self._run(user_id, day, trigger)
+            if trigger == 'schedule':
+                self._review_plan(user_id, trigger)
+            return row
         finally:
+            self.activity = None
             self._lock.release()
+
+    def _review_plan(self, user_id, trigger):
+        """Nightly: check the weight plan and store a revision proposal when needed (never applied automatically)."""
+        self.activity = 'plan'
+        config, ai = self.settings(), self.coach.settings()
+        allow_ai = bool(ai['base_url']) and (ai['provider'] != 'openrouter' or config['allow_external'] or trigger == 'manual')
+        try:
+            return self.reviewer.review(user_id, trigger, allow_ai=allow_ai, cancelled=self._stop.is_set, poll=POLL_SECONDS)
+        except Exception:
+            return None  # the advice is already stored; a failed plan check is retried next week
+
+    def review_plan_now(self, user_id):
+        """Manual 「今すぐ点検」: runs in the background with the same one-at-a-time lock."""
+        if not self._lock.acquire(blocking=False):
+            raise ValueError('AIの処理を実行中です。完了してから再実行してください')
+        self.store.wellness_profile(user_id)
+        self.activity = 'plan'
+        def work():
+            try:
+                self._review_plan(user_id, 'manual')
+            finally:
+                self.activity = None
+                self._lock.release()
+        threading.Thread(target=work, daemon=True).start()
+        return {'accepted': True}
 
     def start(self, user_id, day, trigger='manual'):
         """Run in the background for the web UI; the caller polls history()."""
@@ -173,10 +204,8 @@ class DailyAdvisor:
                     '翌日に向けた生活・食事・運動・睡眠・減量のアドバイスをください。')
         extra = {'day_review': review, 'review_date': key}
         try:
-            if ai['provider'] == 'qnapassistant':
-                answer = self._run_job(user_id, question, extra)
-            else:
-                answer = self.coach.consult(user_id, 'daily', question, extra=extra)['answer']
+            answer = self.coach.ask(user_id, 'daily', question, extra=extra,
+                                    cancelled=self._stop.is_set, poll=POLL_SECONDS)['answer']
         except ValueError as error:
             busy = re.search(r'実行中|混雑|429', str(error))
             status = 'retry' if busy and trigger == 'schedule' and attempts < MAX_ATTEMPTS else 'failed'
@@ -186,24 +215,6 @@ class DailyAdvisor:
             return self._get(user_id, key)
         self._put(user_id, key, status='done', answer=answer, provider=ai['provider'])
         return self._get(user_id, key)
-
-    def _run_job(self, user_id, question, extra):
-        accepted = self.coach.start_consult(user_id, 'daily', question, extra=extra)
-        request_id = accepted['request_id']
-        waited = 0
-        while waited < JOB_DEADLINE_SECONDS and not self._stop.is_set():
-            self.sleep(POLL_SECONDS)
-            waited += POLL_SECONDS
-            state = self.coach.consult_job_status(request_id)
-            if state.get('status') == 'completed':
-                return self.coach.consult_job_result(request_id)['answer']
-            if state.get('status') in TERMINAL:
-                raise ValueError('QnapAssistantで処理が完了しませんでした: ' + str(state.get('error') or state.get('status')))
-        try:
-            self.coach.cancel_consult_job(request_id)
-        except ValueError:
-            pass
-        raise ValueError('QnapAssistantの処理が45分以内に完了しませんでした')
 
     # ---- schedule ----
     def tick(self):
