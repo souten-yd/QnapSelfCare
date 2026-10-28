@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.44 >/dev/null 2>&1; then
-            echo 'Release v0.3.44 already exists; leaving it unchanged.'
+          if gh release view v0.3.45 >/dev/null 2>&1; then
+            echo 'Release v0.3.45 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.44 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.44' \
-            --notes 'Add a summary at the top of Home: weight, blood pressure, steps, sleep and energy balance tiles with a short written summary. Home energy balance now uses intake minus estimated basal metabolism minus Apple Health active energy, with the breakdown shown and a 7-day balance chart. Days without watch active energy fall back to basal metabolism for the current day and are left out of the chart.' \
+          gh release create v0.3.45 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.45' \
+            --notes 'Add QnapAssistant asynchronous local health consultations: accepted request ID, model-loading/generation states, elapsed time and available RAM in SelfCare, manual cancellation and status recovery after browser reload. Legacy provider synchronous consultations remain compatible. Requires QnapAssistant v0.5.9 or later.' \
             --target "$GITHUB_SHA"
 

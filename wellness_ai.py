@@ -99,7 +99,7 @@ class Coach:
                     temporary.unlink(missing_ok=True)
         return {'provider': provider, 'key_configured': path.exists()}
 
-    def consult(self, user_id, mode, question, consent=None):
+    def _consult_payload(self, user_id, mode, question, consent=None):
         if mode not in MODES or not isinstance(question, str) or not 1 <= len(question.strip()) <= 2000:
             raise ValueError('相談内容または種類が不正です')
         config = self.settings()
@@ -129,7 +129,90 @@ class Coach:
                       '無理な減量やBMI下限を下回る目標を勧めません。計画見直しでは数値の根拠、調整候補とトレードオフを具体的に説明してください。'},
                     {'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
                        'question': question.strip()}, ensure_ascii=False)}]}
+        return config, prompt
+
+    def consult(self, user_id, mode, question, consent=None):
+        config, prompt = self._consult_payload(user_id, mode, question, consent)
         return self._complete(config, prompt)
+
+    def _assistant_job_url(self, config, job_id=''):
+        if config['provider'] != 'qnapassistant':
+            raise ValueError('QnapAssistantを相談先に選択してください')
+        base = config['base_url'].rstrip('/')
+        if not base.endswith('/v1'):
+            raise ValueError('QnapAssistantの接続先は /v1 で終わる必要があります')
+        prefix = base[:-3] + '/api/llm/jobs'
+        if job_id:
+            if not re.fullmatch(r'req_[0-9a-f]{48}', job_id):
+                raise ValueError('受付IDが不正です')
+            prefix += '/' + job_id
+        return prefix
+
+    def _assistant_job_request(self, url, payload=None, method='GET'):
+        headers = {'Content-Type': 'application/json'}
+        if payload is not None:
+            body = json.dumps(payload, ensure_ascii=False).encode()
+        else:
+            body = None
+        if self._key_path('qnapassistant').exists():
+            headers['Authorization'] = 'Bearer ' + self._key_path('qnapassistant').read_text().strip()
+        request = Request(url, data=body, headers=headers, method=method)
+        opener = build_opener(NoRedirect(), ProxyHandler({}))
+        try:
+            with opener.open(request, timeout=15) as response:
+                if response.status not in (200, 202):
+                    raise ValueError(f'QnapAssistant HTTP {response.status}')
+                raw = response.read(256 * 1024 + 1)
+                if len(raw) > 256 * 1024:
+                    raise ValueError('AIジョブの応答が大きすぎます')
+                return json.loads(raw)
+        except HTTPError as error:
+            if error.code == 404:
+                raise ValueError('受付IDが見つかりません。サービスが再起動したか、保存期間を超えました') from error
+            if error.code == 409:
+                raise ValueError('QnapAssistantでローカルLLMを選択してください') from error
+            if error.code == 429:
+                raise ValueError('ローカルLLMが混雑しています。しばらくしてから再試行してください') from error
+            raise ValueError(f'QnapAssistant ジョブAPI HTTP {error.code}') from error
+        except (TimeoutError, socket.timeout, URLError, OSError) as error:
+            raise ValueError('QnapAssistantと通信できません。受付IDを保持して再確認できます') from error
+        except (TypeError, KeyError, json.JSONDecodeError) as error:
+            raise ValueError('QnapAssistantから不正なジョブ応答を受信しました') from error
+
+    def start_consult(self, user_id, mode, question):
+        config, prompt = self._consult_payload(user_id, mode, question)
+        endpoint = self._assistant_job_url(config)
+        if config['model'] == 'auto':
+            prompt.pop('model', None)
+        result = self._assistant_job_request(endpoint, prompt, 'POST')
+        request_id = result.get('request_id')
+        if not isinstance(request_id, str) or not re.fullmatch(r'req_[0-9a-f]{48}', request_id):
+            raise ValueError('QnapAssistantから有効な受付IDが返りませんでした')
+        return {'request_id': request_id, 'status': 'queued'}
+
+    def consult_job_status(self, request_id):
+        config = self.settings()
+        endpoint = self._assistant_job_url(config, request_id)
+        result = self._assistant_job_request(endpoint)
+        if result.get('request_id') != request_id:
+            raise ValueError('受付IDが一致しません')
+        return result
+
+    def consult_job_result(self, request_id):
+        config = self.settings()
+        endpoint = self._assistant_job_url(config, request_id)
+        data = self._assistant_job_request(endpoint + '/result')
+        try:
+            answer = data['choices'][0]['message']['content']
+        except (KeyError, IndexError, TypeError) as error:
+            raise ValueError('AIの回答形式が不正です') from error
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError('AIの回答が空です')
+        return {'answer': answer[:10000], 'provider': 'qnapassistant', 'model': config['model']}
+
+    def cancel_consult_job(self, request_id):
+        config = self.settings()
+        return self._assistant_job_request(self._assistant_job_url(config, request_id), None, 'DELETE')
 
     def estimate_meal(self, payload):
         if not isinstance(payload, dict) or set(payload) != {'date', 'breakfast', 'lunch', 'dinner', 'snacks'}:
