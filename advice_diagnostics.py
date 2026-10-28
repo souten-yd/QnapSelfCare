@@ -8,7 +8,7 @@ import re
 SAFE_FIELDS = (
     'status','error_code','elapsed_seconds','generation_seconds',
     'first_token_ms','since_last_token_seconds','token_chunks_observed',
-    'prompt_tokens','completion_tokens_reported','output_bytes',
+    'prompt_tokens','completion_tokens_reported','output_bytes','min_memory_available_bytes',
     'partial_truncated','finish_reason','context_size','input_bytes',
     'raw_output_available','raw_output_persisted','diagnostic_version',
 )
@@ -32,7 +32,7 @@ def sanitize_diagnostic(value):
             if not isinstance(data[k],str) or len(data[k])>80: data.pop(k,None)
     for k in SAFE_FIELDS:
         if k not in ('status','error_code','finish_reason','partial_truncated','raw_output_available','raw_output_persisted'):
-            if k in data and (type(data[k]) is not int or not -1 <= data[k] <= 1000000000):
+            if k in data and (type(data[k]) is not int or not -1 <= data[k] <= (1 << 55)):
                 data.pop(k,None)
     for k in ('partial_truncated','raw_output_available','raw_output_persisted'):
         if k in data and type(data[k]) is not bool: data.pop(k,None)
