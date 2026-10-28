@@ -468,3 +468,16 @@ details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
 .home-advice-body{margin-top:0}
 @media(max-width:1000px){.indicator-grid{grid-template-columns:1fr}.review-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.indicator-explain{grid-template-columns:1fr}.indicator-explain dt{margin-top:4px}.indicator-value{margin-left:0;width:100%}.home-advice{margin-bottom:10px}}
+
+/* ---- 計画の見直し提案 ---- */
+.proposal-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 18px;background:var(--selected);color:var(--link);font-weight:600}
+.proposal-reasons{margin:4px 0 8px;padding-left:20px;font-size:13px;color:var(--text)}
+.proposal-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px}
+.proposal-option{border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--surface);display:flex;flex-direction:column;gap:6px;min-width:0}
+.proposal-option.recommended{border:2px solid var(--primary);background:var(--surface-soft)}
+.proposal-option-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.proposal-changes{margin:0;padding-left:18px;font-size:13px;font-weight:600;color:var(--link)}
+.proposal-facts{grid-template-columns:8em 1fr;gap:2px 8px;font-size:12px;margin:2px 0}
+.proposal-option button{margin-top:auto}
+.proposal-option .notice{margin:4px 0;padding:8px 10px;font-size:12px}
+.proposal-card .list-title{margin-top:14px}

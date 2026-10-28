@@ -118,6 +118,23 @@ class DailyAdviceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.advisor.history('missing')
 
+    def test_schedule_also_checks_the_plan_but_manual_advice_does_not(self):
+        calls = []
+        class Reviewer:
+            def review(self, user_id, trigger, allow_ai=True, cancelled=None, poll=3):
+                calls.append((trigger, allow_ai))
+        self.advisor.reviewer = Reviewer()
+        self.add_day(date(2026, 10, 27))
+        self.advisor.run(self.user, date(2026, 10, 27), 'manual')
+        self.assertEqual(calls, [])
+        self.now = self.now.replace(hour=2, minute=0)
+        self.advisor.save({})
+        self.advisor.run(self.user, date(2026, 10, 26), 'schedule')
+        self.assertEqual(calls, [('schedule', True)])
+        self.coach.config['provider'] = 'openrouter'           # external: plan check runs without AI
+        self.advisor.run(self.user, date(2026, 10, 25), 'schedule')
+        self.assertEqual(calls[-1], ('schedule', False))
+
     def test_restart_marks_running_rows_failed(self):
         self.add_day(date(2026, 10, 27))
         self.advisor._put(self.user, '2026-10-27', status='running', trigger='schedule')

@@ -357,7 +357,7 @@
     $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
     if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
     for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
-    if (!userId) { renderAdviceCard(null); renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
+    if (!userId) { renderAdviceCard(null); $('home-proposal-notice').hidden = true; renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
     let rows = [], error = null, metrics = null;
     const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
@@ -365,6 +365,8 @@
     metrics = await metricsRequest;
     fetch('/api/wellness/advice?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
       .then(data => { if (ticket === serial) renderAdviceCard(data?.latest || null); }).catch(() => renderAdviceCard(null));
+    fetch('/api/wellness/plan-proposals?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
+      .then(data => { if (ticket === serial) $('home-proposal-notice').hidden = !data?.pending; }).catch(() => { $('home-proposal-notice').hidden = true; });
     if (ticket !== serial) return;
     const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
     const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));

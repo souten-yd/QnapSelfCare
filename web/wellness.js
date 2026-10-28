@@ -9,7 +9,7 @@ async function refreshWellness(){
  if(userId!==$('current-user').value)return;
  wellnessProfile=summary.profile;wellnessProfileUser=userId;renderBmi();const form=$('wellness-form');
  for(const key of WELLNESS_FIELDS)form.elements[key].value=summary.profile[key]??'';
- renderCharts();renderEnergy(energy,summary);refreshIndicators(userId).catch(()=>{});refreshAdvice(userId).catch(()=>{});
+ renderCharts();renderEnergy(energy,summary);refreshIndicators(userId).catch(()=>{});refreshAdvice(userId).catch(()=>{});refreshProposals(userId).catch(()=>{});
  const rows={'現在の体重':summary.latest_weight==null?'—':summary.latest_weight+' kg',
   'BMI（身長から算出）':summary.bmi??'身長・体重を設定してください',
   '推定基礎代謝':summary.estimated_bmr_kcal==null?'身長・年齢・計算条件・体重を設定してください':summary.estimated_bmr_kcal+' kcal/日',
@@ -323,3 +323,47 @@ $('meal-estimate-form').addEventListener('submit',guarded(async()=>{
  try{const job=await runAiJob({kind:'meal',meals},st=>{$('meal-estimate-summary').textContent='AIで試算中：'+aiProgressText(st);});const result=await job.done;renderMarkdown($('meal-estimate-summary'),result.answer);}
  catch(error){$('meal-estimate-summary').textContent='試算できませんでした: '+error.message;throw error;}
 }));
+
+// ---- 計画の見直し提案（ユーザーの同意で適用） ----
+let proposalPoll=null;
+const PROPOSAL_STATUS={pending:'確認待ち',applied:'適用済み',dismissed:'見送り',superseded:'新しい案に置き換え',outdated:'計画変更により無効'};
+function proposalOption(p,o,userId){
+ const card=element('article',undefined,'proposal-option'+(o.id===p.recommended?' recommended':''));
+ const head=element('div',undefined,'proposal-option-head');head.append(element('strong',`案${o.id}　${o.title}`));
+ if(o.id===p.recommended)head.append(element('span',p.recommended_by==='ai'?'AIのおすすめ':'おすすめ','eval-badge good'));
+ card.append(head);
+ const ul=element('ul',undefined,'proposal-changes');o.changes.forEach(c=>ul.append(element('li',c)));card.append(ul);
+ const facts=element('dl',undefined,'proposal-facts');
+ const gap=o.projected_gap_kg;
+ for(const [k,v] of [['必要なペース',`週 ${o.weekly_loss_kg} kg（体重の${o.weekly_pct}%）`],['標準摂取',o.planned_intake_kcal==null?'—':`${Math.round(o.planned_intake_kcal).toLocaleString('ja-JP')} kcal/日`],
+  ['目標日の試算',o.projected_goal_weight==null?'—':`${o.projected_goal_weight} kg（目標との差 ${gap>0?'+':''}${gap} kg）`],['新しい目標日',o.entry.goal_date.replaceAll('-','/')]])facts.append(element('dt',k),element('dd',v));
+ card.append(facts);
+ o.warnings.forEach(w=>card.append(element('p',w,'notice error')));
+ if(p.status==='pending'){const b=element('button','この案で計画を更新');b.type='button';
+  b.addEventListener('click',guarded(async()=>{if(!confirm(`案${o.id}「${o.title}」で減量計画を更新しますか？\n\n${o.changes.join('\n')}\n\nこれまでの計画は履歴に残ります。`))return;
+   await api('/api/wellness/plan-proposals/apply',{user_id:userId,proposal_id:p.id,option:o.id});message('計画を更新しました（これまでの計画は履歴に残っています）');await refreshWellness();}));card.append(b);}
+ return card;
+}
+function renderProposal(target,p,userId){
+ target.replaceChildren();
+ const reasons=element('ul',undefined,'proposal-reasons');p.reasons.forEach(r=>reasons.append(element('li',r)));
+ target.append(element('h3','見直しが必要な理由','list-title'),reasons);
+ if(p.answer){const box=element('div',undefined,'ai-answer');renderMarkdown(box,p.answer.replace(/^\s*推奨\s*[:：].*\n?/,''));target.append(element('h3','AIの説明','list-title'),box);}
+ else target.append(element('p',p.error?`AIの説明は取得できませんでした（${p.error}）。記録から計算した案を表示しています。`:'AIを使わず、記録から計算した案を表示しています。','muted'));
+ const grid=element('div',undefined,'proposal-options');p.options.forEach(o=>grid.append(proposalOption(p,o,userId)));target.append(element('h3','修正案','list-title'),grid);
+ if(p.status==='pending'){const skip=element('button','今回は見送る','secondary');skip.type='button';
+  skip.addEventListener('click',guarded(async()=>{await api('/api/wellness/plan-proposals/dismiss',{user_id:userId,proposal_id:p.id});message('修正案を見送りました');await refreshProposals(userId);}));
+  target.append(element('p','どの案も、同意して「この案で計画を更新」を押すまで計画は変わりません。','muted'),skip);}
+}
+async function refreshProposals(userId=$('current-user').value){
+ if(!userId)return;const data=await api('/api/wellness/plan-proposals?user_id='+encodeURIComponent(userId));if(userId!==$('current-user').value)return;
+ const box=$('plan-proposal');
+ if(data.pending){renderProposal(box,data.pending,userId);$('plan-proposal-meta').textContent=`${new Date(data.pending.created_at).toLocaleString('ja-JP')}・${data.pending.trigger==='schedule'?'夜間の自動点検':'手動の点検'}`;}
+ else{box.replaceChildren(element('p',data.has_plan?(data.checking?'点検中です…（AIの回答を待っています）':'いまのところ、計画の見直しが必要な点は見つかっていません。毎日のアドバイスの時刻に、週1回まで自動で点検します。'):'減量計画を保存すると、進み具合を自動で点検します。','muted'));$('plan-proposal-meta').textContent='';}
+ $('plan-check').disabled=!data.has_plan||data.checking;
+ const hist=$('plan-proposal-history');hist.replaceChildren();
+ for(const p of data.history.filter(x=>x.status!=='pending')){const d=element('details',undefined,'coach-turn');d.append(element('summary',`${new Date(p.created_at).toLocaleDateString('ja-JP')}　${PROPOSAL_STATUS[p.status]||p.status}${p.applied_option?'（案'+p.applied_option+'）':''}`));const body=element('div');renderProposal(body,p,userId);d.append(body);hist.append(d);}
+ if(!hist.children.length)hist.append(element('p','これまでの提案はありません。','muted'));
+ if(proposalPoll)clearTimeout(proposalPoll);proposalPoll=data.checking?setTimeout(()=>refreshProposals(userId).catch(()=>{}),5000):null;
+}
+$('plan-check').addEventListener('click',guarded(async()=>{const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');await api('/api/wellness/plan-proposals/check',{user_id});message('計画の点検を開始しました。見直しが必要な場合だけ修正案を表示します');await refreshProposals(user_id);}));

@@ -169,6 +169,13 @@ class Store:
                     status TEXT NOT NULL, trigger TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     review TEXT, answer TEXT, error TEXT, provider TEXT,
                     PRIMARY KEY(user_id, day));
+                CREATE TABLE IF NOT EXISTS ai_plan_proposals(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL, status TEXT NOT NULL, trigger TEXT NOT NULL,
+                    base_plan_id INTEGER, reasons TEXT NOT NULL, options TEXT NOT NULL,
+                    recommended TEXT, recommended_by TEXT, answer TEXT, error TEXT,
+                    applied_option TEXT, decided_at TEXT);
                 PRAGMA user_version=1;
             ''')
             db.executescript(apple_health.SCHEMA_SQL)
@@ -282,7 +289,8 @@ class Store:
         records = self.records(user_id=user_id, limit=2000)['records']
         return wellness.summarize(profile, records, self.meals(user_id, 100))
 
-    def energy_report(self, user_id):
+    def energy_report(self, user_id, extra_plan=None):
+        """extra_plan: an unsaved candidate plan appended as the newest plan (used to evaluate proposals)."""
         profile = self.wellness_profile(user_id)
         with self.connect() as db:
             # All weight history, not the paginated measurement screen's last 2000 rows.
@@ -294,6 +302,8 @@ class Store:
                 'SELECT * FROM weight_plans WHERE user_id=? ORDER BY id', (user_id,))]
             routines = [dict(id=r['id'], effective_date=r['effective_date'], created_at=r['created_at'], entry=json.loads(r['config']))
                         for r in db.execute('SELECT * FROM activity_routines WHERE user_id=? ORDER BY effective_date,id', (user_id,))]
+        if extra_plan is not None:
+            plans.append(dict(energy.plan(extra_plan), id=None, created_at=now()))
         return energy.report(profile, records, diaries, plans, routines=routines)
 
     def save_activity(self, user_id, payload, reuse=False):

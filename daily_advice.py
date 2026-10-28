@@ -13,6 +13,7 @@ import time
 
 import energy
 import health_metrics
+from plan_review import PlanReviewer
 
 JST = energy.JST
 DEFAULT = {'enabled': True, 'time': '02:00', 'allow_external': False}
@@ -48,8 +49,9 @@ def due(moment, scheduled):
 
 
 class DailyAdvisor:
-    def __init__(self, store, coach, clock=None, sleep=time.sleep):
+    def __init__(self, store, coach, clock=None, sleep=time.sleep, reviewer=None):
         self.store, self.coach = store, coach
+        self.reviewer = reviewer or PlanReviewer(store, coach)
         self.clock = clock or (lambda: datetime.now(JST))
         self.sleep = sleep
         self._lock = threading.Lock()        # one run at a time (QnapAssistant runs one job)
@@ -57,6 +59,7 @@ class DailyAdvisor:
         self._thread = None
         self._config = None
         self._retry_at = {}
+        self.activity = None   # 'advice' or 'plan' while something runs
 
     # ---- settings ----
     def settings(self):
@@ -92,7 +95,7 @@ class DailyAdvisor:
             blocked = '外部サービス（OpenRouter）への自動送信が許可されていないため、記録の比較だけを作成します'
         return dict(config, next_run=nxt.isoformat(timespec='minutes'), provider=provider,
                     reviews_day=target_day(nxt, config['time']).isoformat(), ai_blocked=blocked,
-                    running=self._lock.locked())
+                    running=self._lock.locked(), activity=self.activity)
 
     # ---- results ----
     def _row(self, row):
@@ -132,9 +135,39 @@ class DailyAdvisor:
         if not self._lock.acquire(blocking=False):
             raise ValueError('毎日のアドバイスを作成中です。完了してから再実行してください')
         try:
-            return self._run(user_id, day, trigger)
+            self.activity = 'advice'
+            row = self._run(user_id, day, trigger)
+            if trigger == 'schedule':
+                self._review_plan(user_id, trigger)
+            return row
         finally:
+            self.activity = None
             self._lock.release()
+
+    def _review_plan(self, user_id, trigger):
+        """Nightly: check the weight plan and store a revision proposal when needed (never applied automatically)."""
+        self.activity = 'plan'
+        config, ai = self.settings(), self.coach.settings()
+        allow_ai = bool(ai['base_url']) and (ai['provider'] != 'openrouter' or config['allow_external'] or trigger == 'manual')
+        try:
+            return self.reviewer.review(user_id, trigger, allow_ai=allow_ai, cancelled=self._stop.is_set, poll=POLL_SECONDS)
+        except Exception:
+            return None  # the advice is already stored; a failed plan check is retried next week
+
+    def review_plan_now(self, user_id):
+        """Manual 「今すぐ点検」: runs in the background with the same one-at-a-time lock."""
+        if not self._lock.acquire(blocking=False):
+            raise ValueError('AIの処理を実行中です。完了してから再実行してください')
+        self.store.wellness_profile(user_id)
+        self.activity = 'plan'
+        def work():
+            try:
+                self._review_plan(user_id, 'manual')
+            finally:
+                self.activity = None
+                self._lock.release()
+        threading.Thread(target=work, daemon=True).start()
+        return {'accepted': True}
 
     def start(self, user_id, day, trigger='manual'):
         """Run in the background for the web UI; the caller polls history()."""

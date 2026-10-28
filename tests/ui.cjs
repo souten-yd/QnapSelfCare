@@ -29,7 +29,7 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
- w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;');
+ w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testRefreshProposals=refreshProposals;');
  await until(()=>d.getElementById('message').textContent.includes('利用者を追加'));
  const submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
@@ -244,6 +244,22 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  await until(()=>d.getElementById('coach-answer').textContent.includes('長時間のAI相談の結果'),200);
  assert.equal(w.sessionStorage.getItem('selfcare-ai-job-v2'),null);
  w.fetch=previousFetch;
+ {const before=w.fetch;const applied=[];let confirms=0;const confirmBefore=w.confirm;w.confirm=()=>{confirms++;return true;};
+  const proposal={id:7,status:'pending',trigger:'schedule',created_at:'2026-10-28T02:05:00+09:00',reasons:['計画線より2.2 kg重い状態です。'],recommended:'B',recommended_by:'ai',
+   answer:'推奨: B\n## 理由\n- 期日を守れます',error:null,options:[{id:'A',kind:'extend',title:'目標日を見直す',changes:['目標日: 2027-01-14 → 2027-03-07'],warnings:[],weekly_loss_kg:0.4,weekly_pct:0.5,planned_intake_kcal:2096,projected_goal_weight:72.6,projected_gap_kg:0.6,entry:{goal_date:'2027-03-07'}},
+   {id:'B',kind:'intake',title:'摂取量を見直す',changes:['標準摂取: 自動 → 1760 kcal/日'],warnings:[],weekly_loss_kg:0.66,weekly_pct:0.84,planned_intake_kcal:1760,projected_goal_weight:72.4,projected_gap_kg:0.4,entry:{goal_date:'2027-01-14'}}]};
+  w.fetch=(url,init)=>{if(typeof url==='string'&&url.startsWith('/api/wellness/plan-proposals?'))return jsonResponse({pending:applied.length?null:proposal,history:[proposal],has_plan:true,checking:false});
+   if(url==='/api/wellness/plan-proposals/apply'){applied.push(JSON.parse(init.body));return jsonResponse({applied:'B'});}return before(url,init);};
+  await w.__testRefreshProposals();
+  const box=d.getElementById('plan-proposal');
+  assert.match(box.textContent,/計画線より2.2 kg重い/);assert.match(box.textContent,/AIのおすすめ/);
+  assert.doesNotMatch(box.textContent,/推奨: B/);   // the machine-readable line is hidden
+  assert.equal(box.querySelectorAll('.proposal-option').length,2);
+  assert(box.querySelector('.proposal-option.recommended').textContent.includes('案B'));
+  box.querySelector('.proposal-option.recommended button').click();
+  await until(()=>applied.length===1);
+  assert.equal(confirms,1);assert.deepEqual({...applied[0],user_id:undefined},{user_id:undefined,proposal_id:7,option:'B'});
+  w.fetch=before;w.confirm=confirmBefore;}
  plan.elements.goal_date.value='2027-04-01';plan.elements.reason.value='活動量に合わせ延長';submit('weight-plan-form');
  await until(()=>d.getElementById('plan-history').textContent.includes('活動量に合わせ延長'));
  assert.match(d.getElementById('plan-history').textContent,/2027-03-01/);
