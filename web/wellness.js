@@ -9,7 +9,7 @@ async function refreshWellness(){
  if(userId!==$('current-user').value)return;
  wellnessProfile=summary.profile;wellnessProfileUser=userId;renderBmi();const form=$('wellness-form');
  for(const key of WELLNESS_FIELDS)form.elements[key].value=summary.profile[key]??'';
- renderCharts();renderEnergy(energy,summary);
+ renderCharts();renderEnergy(energy,summary);refreshIndicators(userId).catch(()=>{});refreshAdvice(userId).catch(()=>{});
  const rows={'現在の体重':summary.latest_weight==null?'—':summary.latest_weight+' kg',
   'BMI（身長から算出）':summary.bmi??'身長・体重を設定してください',
   '推定基礎代謝':summary.estimated_bmr_kcal==null?'身長・年齢・計算条件・体重を設定してください':summary.estimated_bmr_kcal+' kcal/日',
@@ -163,7 +163,63 @@ $('coach-cancel').addEventListener('click',guarded(async()=>{
  if(coachActiveJob===current){coachProgress('キャンセル済み','受付ID '+current.id);clearCoachJob();}
 }));
 $('coach-plan').addEventListener('click',()=>{const field=$('wellness-form').elements.plan_text;field.value=(coachTurns.at(-1)?.answer||'').slice(0,8000);selectTab('wellness','profile');field.focus();message('計画欄へコピーしました。内容を確認して保存してください');});
-async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+({controldeck:'ControlDeck',qnapassistant:'QnapAssistant',local:'ローカルLLM',openrouter:'OpenRouter'}[config.provider]||config.provider)+(config.provider==='openrouter'?'（外部サービス）':'（NAS・LAN内）');}
+async function refreshAiSettings(){const config=await api('/api/ai/settings');const f=$('ai-form');for(const key of ['provider','base_url','model'])f.elements[key].value=config[key];$('ai-status').textContent=config.key_configured?'APIキーを保存済み':'この接続先のAPIキーは未設定です';$('coach-provider').textContent='相談先: '+({controldeck:'ControlDeck',qnapassistant:'QnapAssistant',local:'ローカルLLM',openrouter:'OpenRouter'}[config.provider]||config.provider)+(config.provider==='openrouter'?'（外部サービス）':'（NAS・LAN内）');refreshAdviceSettings().catch(()=>{});}
+// ---- 評価指標 tab ----
+const STATUS_WORD={good:'良好',ok:'注意',warn:'要見直し',unknown:'データ不足'},CONFIDENCE_WORD={high:'信頼度 高',medium:'信頼度 中',low:'信頼度 低'};
+async function refreshIndicators(userId){
+ const data=await api('/api/wellness/metrics?user_id='+encodeURIComponent(userId));if(userId!==$('current-user').value)return;
+ $('indicator-date').textContent=data.date.replaceAll('-','/')+' 時点';
+ for(const [group,target] of [['diet','indicator-diet'],['health','indicator-health']]){
+  $(target).replaceChildren(...data[group].map(m=>{
+   const card=element('article',undefined,'indicator-card '+m.status);const head=element('div',undefined,'indicator-head');
+   head.append(element('span',STATUS_WORD[m.status]||'','eval-badge '+m.status),element('h3',m.label),element('strong',m.value,'indicator-value'));
+   card.append(head,element('p',m.detail,'indicator-detail'));
+   if(m.explain){const ex=element('dl',undefined,'indicator-explain');ex.append(element('dt','何がわかるか'),element('dd',m.explain.what),element('dt','なぜ大切か'),element('dd',m.explain.why));card.append(ex);
+    const more=element('details',undefined,'indicator-more');more.append(element('summary','計算方法と注意'));const how=element('dl',undefined,'indicator-explain');how.append(element('dt','計算方法'),element('dd',m.explain.how),element('dt','注意'),element('dd',m.explain.caveat));more.append(how);card.append(more);}
+   const meta=element('p',undefined,'indicator-meta');meta.append(element('span','目安：'+m.reference));if(CONFIDENCE_WORD[m.confidence])meta.append(element('span',CONFIDENCE_WORD[m.confidence],'eval-confidence '+m.confidence));card.append(meta);
+   return card;}));
+ }
+}
+// ---- 毎日のアドバイス ----
+const ADVICE_STATUS={done:'作成済み',running:'作成中…',retry:'AIが混雑していたため、少し後に再試行します',failed:'作成できませんでした',skipped:'記録がないため作成していません',review_only:'記録の比較のみ（AIなし）'};
+let advicePoll=null;
+function adviceDay(day){const d=new Date(day+'T12:00:00');return `${d.getMonth()+1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）`;}
+function renderReview(review){
+ const table=element('div',undefined,'review-grid');
+ for(const i of review?.items||[]){if(i.value===null&&i.avg7===null)continue;
+  const cell=element('div',undefined,'review-item '+(i.status||''));const arrow={up:'↑',down:'↓',usual:'→',none:''}[i.trend]||'';
+  cell.append(element('span',i.label),element('strong',i.value===null?'—':`${i.value.toLocaleString('ja-JP')} ${i.unit}`),element('small',i.avg7===null?'7日平均なし':`${arrow} 7日平均 ${i.avg7.toLocaleString('ja-JP')}`));table.append(cell);}
+ return table;
+}
+function renderAdviceEntry(target,item){
+ target.replaceChildren();if(!item){target.append(element('p','まだアドバイスはありません。「昨日分を今すぐ作成」で作成できます。','muted'));return;}
+ const head=element('div',undefined,'advice-head');head.append(element('h3',adviceDay(item.day)+'の振り返り'),element('span',ADVICE_STATUS[item.status]||item.status,'eval-badge '+({done:'good',running:'ok',retry:'ok',failed:'warn'}[item.status]||'')));target.append(head);
+ if(item.review){target.append(renderReview(item.review));if(item.review.notes?.length){const ul=element('ul',undefined,'advice-notes');item.review.notes.forEach(n=>ul.append(element('li',n)));target.append(ul);}}
+ if(item.answer){const box=element('div',undefined,'ai-answer');renderMarkdown(box,item.answer);target.append(box);}
+ if(item.error)target.append(element('p',item.error,'notice'+(item.status==='failed'?' error':'')));
+ target.append(element('small',`更新 ${new Date(item.updated_at).toLocaleString('ja-JP')}${item.trigger==='schedule'?'・自動作成':'・手動作成'}`,'muted'));
+}
+async function refreshAdvice(userId=$('current-user').value){
+ if(!userId)return;const data=await api('/api/wellness/advice?user_id='+encodeURIComponent(userId));if(userId!==$('current-user').value)return;
+ renderAdviceEntry($('advice-latest'),data.latest);
+ const hist=$('advice-history');hist.replaceChildren();
+ for(const item of data.history.slice(1)){const d=element('details',undefined,'coach-turn');d.append(element('summary',`${adviceDay(item.day)}　${ADVICE_STATUS[item.status]||item.status}`));const body=element('div');renderAdviceEntry(body,item);d.append(body);hist.append(d);}
+ if(data.history.length<=1)hist.append(element('p','過去のアドバイスはありません。','muted'));
+ renderAdviceSchedule(data.settings);
+ const busy=data.settings.running||data.latest?.status==='running';
+ $('advice-run-yesterday').disabled=busy;$('advice-run-today').disabled=busy;
+ if(advicePoll)clearTimeout(advicePoll);advicePoll=busy?setTimeout(()=>refreshAdvice(userId).catch(()=>{}),5000):null;
+}
+function renderAdviceSchedule(cfg){
+ const next=new Date(cfg.next_run);
+ $('advice-schedule-status').textContent=cfg.enabled?`次回 ${next.getMonth()+1}/${next.getDate()} ${cfg.time}（${adviceDay(cfg.reviews_day)}分）`:'自動作成はオフ';
+ const f=$('advice-settings-form');if(document.activeElement?.form!==f){f.elements.enabled.checked=cfg.enabled;f.elements.time.value=cfg.time;f.elements.allow_external.checked=cfg.allow_external;}
+ $('advice-external-row').hidden=cfg.provider!=='openrouter';
+ $('advice-settings-status').textContent=cfg.ai_blocked||'';
+}
+async function refreshAdviceSettings(){renderAdviceSchedule(await api('/api/ai/daily-settings'));}
+$('advice-settings-form').addEventListener('submit',guarded(async()=>{const f=$('advice-settings-form');renderAdviceSchedule(await api('/api/ai/daily-settings',{enabled:f.elements.enabled.checked,time:f.elements.time.value,allow_external:f.elements.allow_external.checked}));message('毎日のアドバイスの設定を保存しました');}));
+for(const [id,day] of [['advice-run-yesterday','yesterday'],['advice-run-today','today']])$(id).addEventListener('click',guarded(async()=>{const user_id=$('current-user').value;if(!user_id)throw Error('利用者を選択してください');await api('/api/wellness/advice/run',{user_id,day});message('アドバイスの作成を開始しました。完了まで数分かかることがあります');await refreshAdvice(user_id);}));
 $('ai-form').addEventListener('submit',guarded(async()=>{const f=$('ai-form');await api('/api/ai/settings',{provider:f.elements.provider.value,base_url:f.elements.base_url.value.trim(),model:f.elements.model.value.trim()});await refreshAiSettings();message('AIの接続先を保存しました');}));
 $('ai-key-form').addEventListener('submit',guarded(async()=>{const f=$('ai-key-form');await api('/api/ai/key',{provider:$('ai-form').elements.provider.value,key:f.elements.key.value});f.reset();await refreshAiSettings();message('APIキーを更新しました');}));
 $('ai-form').elements.provider.addEventListener('change',()=>{const f=$('ai-form');const p=f.elements.provider.value;if(p==='qnapassistant')f.elements.base_url.value='http://127.0.0.1:11435/v1';else if(p==='openrouter')f.elements.base_url.value='https://openrouter.ai/api/v1';else f.elements.base_url.value='';f.elements.model.value=p==='openrouter'?'openai/gpt-4o-mini':'auto';});

@@ -431,3 +431,40 @@ details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
 .coach-card .coach-thread{margin:0 0 6px}
 .coach-card #coach-answer{margin:0 0 6px}
 .coach-card .coach-actions{margin:0 0 16px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+
+/* ---- 評価指標 tab ---- */
+.eval-badge.good{color:var(--good);border-color:var(--good)}.eval-badge.ok{color:var(--warning);border-color:var(--warning)}.eval-badge.warn{color:var(--warn);border-color:var(--warn)}
+.legend-list{list-style:none;padding:0;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--secondary-text)}
+.legend-list li{display:flex;align-items:center;gap:6px}
+.indicator-group .home-section{margin:22px 0 10px}
+.indicator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.indicator-card{background:var(--surface);border:1px solid var(--border);border-left:5px solid var(--border);border-radius:14px;padding:16px 18px;min-width:0}
+.indicator-card.good{border-left-color:var(--good)}.indicator-card.ok{border-left-color:var(--warning)}.indicator-card.warn{border-left-color:var(--warn)}
+.indicator-card.unknown{background:var(--surface-soft)}
+.indicator-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.indicator-head h3{margin:0;font-size:15px}
+.indicator-value{margin-left:auto;font-size:17px;font-variant-numeric:tabular-nums}
+.indicator-detail{color:var(--text);font-size:13px;margin:8px 0}
+.indicator-explain{grid-template-columns:7em 1fr;gap:4px 10px;font-size:12.5px;margin:8px 0;line-height:1.7}
+.indicator-explain dt{font-weight:700;color:var(--muted)}
+.indicator-explain dd{color:var(--secondary-text)}
+.indicator-more>summary{font-size:12.5px;color:var(--link)}
+.indicator-more[open]>summary{margin-bottom:4px}
+.indicator-meta{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;margin:8px 0 0}
+/* ---- 毎日のアドバイス ---- */
+.advice-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.advice-head h3{margin:0;font-size:15px}
+.review-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.review-item{background:var(--surface-soft);border-radius:12px;padding:9px 11px;display:flex;flex-direction:column;gap:1px;min-width:0;border-top:3px solid transparent}
+.review-item.good{border-top-color:var(--good)}.review-item.warn{border-top-color:var(--warn)}
+.review-item span{font-size:11px;color:var(--muted);font-weight:600}
+.review-item strong{font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.review-item small{font-size:10.5px;color:var(--muted)}
+.advice-notes{margin:10px 0;padding-left:20px;font-size:13px;color:var(--secondary-text)}
+.advice-actions{justify-content:flex-start;margin:14px 0}
+#advice-history .coach-turn{margin:6px 0}
+.home-advice{margin:0 0 18px}
+.home-advice-date{margin:0 0 6px;font-size:12px;color:var(--muted)}
+.home-advice-body{margin-top:0}
+@media(max-width:1000px){.indicator-grid{grid-template-columns:1fr}.review-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.indicator-explain{grid-template-columns:1fr}.indicator-explain dt{margin-top:4px}.indicator-value{margin-left:0;width:100%}.home-advice{margin-bottom:10px}}

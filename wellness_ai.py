@@ -16,7 +16,8 @@ import health_metrics
 DEFAULT = {'provider': 'controldeck', 'base_url': '', 'model': 'auto'}
 PROVIDERS = ('controldeck', 'qnapassistant', 'local', 'openrouter')
 MODES = {'health': '健康記録の整理', 'meal': '食事の振り返り',
-         'diet': '無理のない目標検討', 'review': '計画の見直し', 'lifestyle': '運動・睡眠の振り返り'}
+         'diet': '無理のない目標検討', 'review': '計画の見直し', 'lifestyle': '運動・睡眠の振り返り',
+         'daily': '1日の振り返りと翌日のアドバイス'}
 # What each theme should focus on; appended to the shared system prompt.
 MODE_GUIDE = {
     'health': '体重・血圧・睡眠・活動の変化を整理し、良い点と気になる点を分けて示してください。',
@@ -24,6 +25,8 @@ MODE_GUIDE = {
     'diet': '目標体重と期日が無理のない範囲か、減量ペースと安全な下限に照らして検討してください。',
     'review': '計画線・試算・週次実績の差を数値で示し、目標日の延長・摂取・生活活動・運動の調整候補とトレードオフを比較してください。',
     'lifestyle': '歩数・運動時間・睡眠時間と規則性・安静時心拍の目安から、日常に取り入れやすい工夫を示してください。',
+    'daily': 'context.day_reviewは対象日の記録と直前7日平均の比較です。対象日の良かった点と気になる点を週の傾向と比べて評価し、'
+             '翌日に試せる生活・食事・運動・睡眠・減量の行動を最大3つ、具体的に提案してください。記録がない項目は推測しないでください。',
 }
 SYSTEM_PROMPT = (
     'あなたは個人の健康記録・食事・減量計画の振り返りを支援するアシスタントです。'
@@ -134,7 +137,7 @@ class Coach:
                     temporary.unlink(missing_ok=True)
         return {'provider': provider, 'key_configured': path.exists()}
 
-    def _consult_payload(self, user_id, mode, question, consent=None, history=None):
+    def _consult_payload(self, user_id, mode, question, consent=None, history=None, extra=None):
         if mode not in MODES or not isinstance(question, str) or not 1 <= len(question.strip()) <= 2000:
             raise ValueError('相談内容または種類が不正です')
         config = self.settings()
@@ -158,6 +161,8 @@ class Coach:
         context['weight_plan'] = ({k: v for k, v in activity['active_plan'].items() if k not in ('id', 'created_at')} if activity['active_plan'] else None)
         context['plan_analysis'] = activity.get('plan_analysis')
         context['evaluations'] = self._evaluations(user_id)
+        if extra:
+            context.update(extra)
         turns = clean_history(history)
         messages = [{'role': 'system', 'content': SYSTEM_PROMPT + MODE_GUIDE[mode]}]
         for turn in turns:
@@ -177,8 +182,8 @@ class Coach:
         return [{'group': group, 'label': m['label'], 'value': m['value'], 'status': m['status'], 'basis': m['reference']}
                 for group in ('diet', 'health') for m in result[group]]
 
-    def consult(self, user_id, mode, question, consent=None, history=None):
-        config, prompt = self._consult_payload(user_id, mode, question, consent, history)
+    def consult(self, user_id, mode, question, consent=None, history=None, extra=None):
+        config, prompt = self._consult_payload(user_id, mode, question, consent, history, extra)
         return self._complete(config, prompt)
 
     def _assistant_job_url(self, config, job_id=''):
@@ -225,8 +230,8 @@ class Coach:
         except (TypeError, KeyError, json.JSONDecodeError) as error:
             raise ValueError('QnapAssistantから不正なジョブ応答を受信しました') from error
 
-    def start_consult(self, user_id, mode, question, history=None):
-        config, prompt = self._consult_payload(user_id, mode, question, history=history)
+    def start_consult(self, user_id, mode, question, history=None, extra=None):
+        config, prompt = self._consult_payload(user_id, mode, question, history=history, extra=extra)
         endpoint = self._assistant_job_url(config)
         if config['model'] == 'auto':
             prompt.pop('model', None)

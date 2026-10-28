@@ -138,6 +138,17 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
   assert.equal(bodies[1].history[0].question,'塩分を減らしたい');
   d.getElementById('coach-reset').click();assert.equal(d.getElementById('coach-answer').hidden,true);
   w.fetch=before;}
+ d.querySelector('[data-tabs="wellness"] [data-tab="metrics"]').click();
+ await until(()=>d.querySelectorAll('#indicator-health .indicator-card').length>=5);
+ assert.match(d.getElementById('indicator-health').textContent,/家庭血圧/);
+ assert.match(d.getElementById('indicator-health').textContent,/何がわかるか/);
+ await until(()=>d.getElementById('advice-settings-form').elements.time.value==='02:00');
+ assert.equal(d.getElementById('advice-settings-form').elements.enabled.checked,true);
+ const adviceForm=d.getElementById('advice-settings-form');adviceForm.elements.time.value='05:15';submit('advice-settings-form');
+ await until(()=>d.getElementById('message').textContent==='毎日のアドバイスの設定を保存しました');
+ assert.equal((await (await fetch(base+'/api/ai/daily-settings')).json()).time,'05:15');
+ assert.match(d.getElementById('advice-latest').textContent,/まだアドバイスはありません/);
+ assert(d.getElementById('ai-settings').closest('[data-panel="coach"]'));
  d.querySelector('[data-tabs="wellness"] [data-tab="today"]').click();
  const wellbeing=d.getElementById('wellness-form');wellbeing.elements.height_cm.value='180';wellbeing.elements.age.value='40';wellbeing.elements.sex.value='male';submit('wellness-form');
  await until(()=>d.getElementById('message').textContent==='健康設定と計画を保存しました');
