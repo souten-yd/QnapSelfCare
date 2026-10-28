@@ -291,13 +291,13 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('食事試算の内容を指定してください')
                     result = self.server.coach.estimate_meal(body['meals'])
                 elif path == '/api/ai/consult':
-                    if set(body) not in ({'user_id', 'mode', 'question'}, {'user_id', 'mode', 'question', 'consent'}):
+                    if not {'user_id', 'mode', 'question'} <= set(body) <= {'user_id', 'mode', 'question', 'consent', 'history'}:
                         raise ValueError('相談内容を指定してください')
-                    result = self.server.coach.consult(body['user_id'], body['mode'], body['question'])
+                    result = self.server.coach.consult(body['user_id'], body['mode'], body['question'], history=body.get('history'))
                 elif path == '/api/ai/consult/start':
-                    if set(body) != {'user_id', 'mode', 'question'}:
+                    if not {'user_id', 'mode', 'question'} <= set(body) <= {'user_id', 'mode', 'question', 'history'}:
                         raise ValueError('相談内容を指定してください')
-                    self._json(202, self.server.coach.start_consult(body['user_id'], body['mode'], body['question']))
+                    self._json(202, self.server.coach.start_consult(body['user_id'], body['mode'], body['question'], body.get('history')))
                     return
                 elif path == '/api/ai/consult/cancel':
                     if set(body) != {'request_id'}:
