@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.41 >/dev/null 2>&1; then
-            echo 'Release v0.3.41 already exists; leaving it unchanged.'
+          if gh release view v0.3.42 >/dev/null 2>&1; then
+            echo 'Release v0.3.42 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.41 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.41' \
-            --notes 'Fix iOS Shortcuts imports: accept dictionary or JSON text groups, newline-separated sample records, numeric strings, and one extra pair of braces around samples. Preserve timestamps, atomic validation and duplicate detection. Weight and BMI remain excluded. Update the NAS package and rerun the shortcut.' \
+          gh release create v0.3.42 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.42' \
+            --notes 'Add dashboard display for imported Apple Health records: steps, distance, active energy, heart rate, oxygen saturation and sleep. Select a user, date and source; inspect graphs and record details. Includes complete pagination, sleep overlap handling and touch graph cursors. Existing Shortcuts and stored samples remain compatible.' \
             --target "$GITHUB_SHA"
 
