@@ -37,6 +37,15 @@ class WellnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.save_wellness_profile(self.user, {'bmi_low': 27, 'bmi_high': 24})
 
+    def test_step_goal_defaults_and_validates(self):
+        self.assertEqual(self.store.wellness_profile(self.user)['step_goal'], 8000)
+        self.assertEqual(self.store.save_wellness_profile(self.user, {'step_goal': 10000})['step_goal'], 10000)
+        self.assertEqual(self.store.wellness_profile(self.user)['step_goal'], 10000)
+        for bad in (999, 50001, 8000.5, '8000', True):
+            with self.assertRaises(ValueError):
+                self.store.save_wellness_profile(self.user, {'step_goal': bad})
+        self.assertEqual(self.store.wellness_profile(self.user)['step_goal'], 10000)
+
     def test_backup_restores_meals_profile_ai_without_secret(self):
         self.store.save_wellness_profile(self.user, {'plan_text': '週に一度確認'})
         self.store.add_meal(self.user, {'note': '夕食：魚と野菜', 'calories': 550})

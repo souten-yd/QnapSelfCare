@@ -49,3 +49,8 @@ assert.equal(h.dietProgress(weights, null, null).percent, null);
 assert.equal(h.dietProgress(weights, null, 76).percent, 63);
 assert.equal(h.dietProgress([], plan, null), null);
 console.log('Home dashboard calculations: passed');
+assert.equal(h.stepGoalOf(null), 8000);
+assert.equal(h.stepGoalOf({step_goal: 10000}), 10000);
+assert.equal(h.stepGoalOf({step_goal: 'x'}), 8000);
+assert.equal(h.stepGoalOf({step_goal: 500}), 8000);
+console.log('Home step goal: passed');

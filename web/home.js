@@ -1,7 +1,7 @@
 'use strict';
 /* Home dashboard: today's checks, diet progress, activity and sleep at a glance. */
 (() => {
-  const STEP_GOAL = 8000;
+  const DEFAULT_STEP_GOAL = 8000;
   const DAY = 86400000;
   const SLEEP_STAGES = ['deep', 'core', 'rem', 'asleep_unspecified'];
   const STAGE_NAMES = {deep: '深い', core: 'コア', rem: 'レム', asleep_unspecified: '睡眠'};
@@ -54,7 +54,9 @@
     if (before) result.change7 = Math.round((current.weight-before.weight)*10)/10;
     return result;
   }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress}; return; }
+  function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
   const $ = id => document.getElementById(id);
@@ -161,8 +163,8 @@
       stat('運動時間', num(todayEntry?.minutes), todayEntry?.minutes == null ? '' : '分', todayEntry?.source === 'routine' ? 'いつもの設定' : ''));
     row.append(stats); target.append(row);
     if (steps == null) target.append(el('p', 'ウォッチ・ヘルスケアの記録はまだありません。記録なしはゼロではありません。', 'home-empty'));
-    else if (steps >= STEP_GOAL) target.append(el('p', '歩数の目安を達成しました。', 'home-note good'));
-    else target.append(el('p', `目安まであと ${num(STEP_GOAL-steps)} 歩`, 'home-note'));
+    else if (steps >= STEP_GOAL) target.append(el('p', '歩数の目標を達成しました。', 'home-note good'));
+    else target.append(el('p', `目標まであと ${num(STEP_GOAL-steps)} 歩`, 'home-note'));
   }
 
   function renderSleep(night, average) {
@@ -273,6 +275,9 @@
     const nights = Object.fromEntries(days.map(d => [d, sleepFor(rows.filter(r => r.source === sleepSource), d)]));
     const energy = typeof energyData !== 'undefined' && wellnessProfileUser === userId ? energyData : null;
     const summary = typeof wellnessSummaryData !== 'undefined' && wellnessProfileUser === userId ? wellnessSummaryData : null;
+    STEP_GOAL = stepGoalOf(summary?.profile);
+    const goalInput = $('home-goal-form').elements.step_goal; if (document.activeElement !== goalInput) goalInput.value = STEP_GOAL;
+    $('home-goal-summary').textContent = `歩数目標 ${num(STEP_GOAL)} 歩を変更`;
     const todayEntry = energy ? (energy.entries || energy.diaries || []).find(x => x.date === energy.today) : null;
     $('home-source').textContent = error ? error.message : source ? `記録元：${source === 'unknown' ? '不明' : source}` : '';
     renderDiet(energy, summary);
@@ -285,7 +290,7 @@
     const stepDays = days.filter(d => totals[d].steps != null && d !== todayKey);
     $('home-steps-avg').textContent = stepDays.length ? `1日平均 ${num(stepDays.reduce((a, d) => a+totals[d].steps, 0)/stepDays.length)} 歩` : '';
     $('home-sleep-avg').textContent = sleepAvg == null ? '' : `平均 ${hm(sleepAvg)}`;
-    bars($('home-steps-week'), days, days.map(d => totals[d].steps), {label: '直近7日の歩数', empty: '歩数の記録はありません。', goal: STEP_GOAL, goalLabel: '目安 8,000',
+    bars($('home-steps-week'), days, days.map(d => totals[d].steps), {label: '直近7日の歩数', empty: '歩数の記録はありません。', goal: STEP_GOAL, goalLabel: `目標 ${num(STEP_GOAL)}`,
       total: v => v, parts: v => [{value: v, color: v >= STEP_GOAL ? 'var(--activity)' : 'var(--activity-soft)', title: `${num(v)} 歩`}], short: v => v >= 1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v))});
     const legend = el('div', undefined, 'home-legend'); for (const s of ['deep', 'core', 'rem']) legend.append(el('span', STAGE_NAMES[s], 'stage-label stage-'+s));
     bars($('home-sleep-week'), days, days.map(d => nights[d]), {label: '直近7日の睡眠時間', empty: '睡眠の記録はありません。', goal: 7*3600000, goalLabel: '7時間', stacked: true, legend,
@@ -297,5 +302,16 @@
       [!!nights[todayKey], nights[todayKey] ? `睡眠 ${hm(nights[todayKey].total)}` : '睡眠'],
       [steps != null && steps >= STEP_GOAL, `歩数 ${num(steps)} / ${num(STEP_GOAL)}`]]);
   }
+  $('home-goal-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget, button = form.querySelector('button'), userId = $('current-user').value;
+    if (!userId) { message('利用者を選択してください', true); return; }
+    button.disabled = true;
+    try {
+      await api('/api/wellness/profile', {user_id: userId, profile: {step_goal: Number(form.elements.step_goal.value)}});
+      await refreshWellness(); $('home-goal-edit').open = false; await refreshHome();
+      message('歩数目標を保存しました');
+    } catch (error) { message(error.message, true); } finally { button.disabled = false; }
+  });
   window.refreshHome = refreshHome;
 })();

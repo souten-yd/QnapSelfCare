@@ -5,7 +5,7 @@ import math
 DEFAULT = {'height_cm': None, 'age': None, 'sex': '', 'goal_weight_kg': None,
            'goal_date': '', 'bp_sys_low': 90, 'bp_sys_high': 135,
            'bp_dia_low': 60, 'bp_dia_high': 85, 'bmi_low': 18.5, 'bmi_high': 24.9,
-           'plan_text': '', 'plan_updated_at': ''}
+           'plan_text': '', 'plan_updated_at': '', 'step_goal': 8000}
 
 
 def number(value, minimum, maximum, label, nullable=False):
@@ -39,6 +39,10 @@ def validate(value):
             raise ValueError('下限は上限より小さくしてください')
     if not isinstance(result['goal_date'], str) or len(result['goal_date']) > 10:
         raise ValueError('目標日が不正です')
+    result['step_goal'] = number(result['step_goal'], 1000, 50000, '1日の歩数目標')
+    if not result['step_goal'].is_integer():
+        raise ValueError('1日の歩数目標は整数で指定してください')
+    result['step_goal'] = int(result['step_goal'])
     if result['goal_date']:
         try:
             datetime.strptime(result['goal_date'], '%Y-%m-%d')
