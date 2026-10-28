@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.42 >/dev/null 2>&1; then
-            echo 'Release v0.3.42 already exists; leaving it unchanged.'
+          if gh release view v0.3.43 >/dev/null 2>&1; then
+            echo 'Release v0.3.43 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.42 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.42' \
-            --notes 'Add dashboard display for imported Apple Health records: steps, distance, active energy, heart rate, oxygen saturation and sleep. Select a user, date and source; inspect graphs and record details. Includes complete pagination, sleep overlap handling and touch graph cursors. Existing Shortcuts and stored samples remain compatible.' \
+          gh release create v0.3.43 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.43' \
+            --notes 'Redesign the Home dashboard: daily checks, diet progress ring with plan and goal lines, current activity, overnight sleep stages, heart rate and oxygen, energy balance, and 7-day steps and sleep charts. Add a per-user daily step goal (default 8,000) editable from Home or health settings. Existing records, charts and Apple Health data remain compatible.' \
             --target "$GITHUB_SHA"
 
