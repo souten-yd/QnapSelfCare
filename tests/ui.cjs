@@ -199,7 +199,7 @@ async function until(check){for(let i=0;i<100;i++){if(await check())return;await
    return Promise.resolve(new Response(JSON.stringify({request_id:taskID,status:'queued'}),{status:202,headers:{'Content-Type':'application/json'}}));
   if(typeof url==='string'&&url.includes('/api/ai/consult/status?')){
    stateCalls++;return Promise.resolve(new Response(JSON.stringify({
-    request_id:taskID,status:stateCalls===1?'generating':'completed',elapsed_seconds:stateCalls*10,
+    request_id:taskID,status:stateCalls<=2?'generating':'completed',elapsed_seconds:stateCalls*10,
     stage_elapsed_seconds:7,memory_available_bytes:8*1073741824
    }),{headers:{'Content-Type':'application/json'}}));
   }
