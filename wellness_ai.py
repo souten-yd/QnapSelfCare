@@ -270,6 +270,14 @@ class Coach:
             raise ValueError('AIの回答が空です')
         return {'answer': answer[:10000], 'provider': 'qnapassistant', 'model': config['model']}
 
+    def job_diagnostics(self, request_id, include_output=False):
+        """Read a local job's short-lived private evidence; never log its raw text."""
+        config = self.settings()
+        url = self._assistant_job_url(config, request_id) + '/diagnostics'
+        if include_output:
+            url += '?include_output=1'
+        return self._assistant_job_request(url)
+
     def cancel_consult_job(self, request_id):
         config = self.settings()
         return self._assistant_job_request(self._assistant_job_url(config, request_id), None, 'DELETE')
