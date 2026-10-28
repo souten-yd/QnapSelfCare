@@ -179,6 +179,12 @@ class Store:
                 PRAGMA user_version=1;
             ''')
             db.executescript(apple_health.SCHEMA_SQL)
+            # Existing QPKG databases need an additive schema migration.
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(ai_daily_advice)')}
+            if 'diagnostics' not in columns:
+                db.execute('ALTER TABLE ai_daily_advice ADD COLUMN diagnostics TEXT')
+            if 'diagnostic_job_id' not in columns:
+                db.execute('ALTER TABLE ai_daily_advice ADD COLUMN diagnostic_job_id TEXT')
             db.execute("UPDATE jobs SET state='failed',finished_at=?,message=? WHERE state IN ('queued','running')",
                        (now(), "サービス再起動により中断されました。再実行してください"))
             db.execute("UPDATE ai_daily_advice SET status='failed',updated_at=?,error=? WHERE status='running'",
