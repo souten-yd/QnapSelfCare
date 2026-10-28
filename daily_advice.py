@@ -122,7 +122,7 @@ class DailyAdvisor:
 
     def raw_diagnostics(self, user_id, day):
         """Fetch transient raw output only on explicit user action, never save it."""
-        if not re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}', day):
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
             raise ValueError('診断対象の日付が不正です')
         with self.store.connect() as db:
             row = db.execute('SELECT diagnostic_job_id FROM ai_daily_advice WHERE user_id=? AND day=?',
