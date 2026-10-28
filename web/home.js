@@ -65,7 +65,8 @@
   function summaryText(x) {
     const out = [];
     if (x.remaining != null) out.push(x.remaining <= 0 ? '目標体重に到達しています。' : `目標体重まであと${x.remaining.toFixed(1)}kg${x.change7 != null && x.change7 < 0 ? `（1週間で${Math.abs(x.change7).toFixed(1)}kg減）` : x.change7 != null && x.change7 > 0 ? `（1週間で${x.change7.toFixed(1)}kg増）` : ''}。`);
-    if (x.bpHigh) out.push('血圧が参考上限を超えています。');
+    for (const e of x.evaluations || []) out.push(e);
+    if (x.bpHigh && !(x.evaluations || []).some(e => e.includes('血圧'))) out.push('血圧が参考上限を超えています。');
     if (x.steps != null) out.push(x.steps >= x.stepGoal ? '歩数は目標を達成。' : `歩数は目標まであと${Math.round(x.stepGoal-x.steps).toLocaleString('ja-JP')}歩。`);
     if (x.sleep != null && x.sleepAvg != null) { const d = Math.round((x.sleep-x.sleepAvg)/60000); if (Math.abs(d) >= 20) out.push(`睡眠は平均より${Math.abs(d)}分${d < 0 ? '短め' : '長め'}。`); }
     else if (x.sleep == null) out.push('昨夜の睡眠記録はありません。');
@@ -101,6 +102,20 @@
     return box;
   }
 
+  const STATUS_TEXT = {good: '良好', ok: '注意', warn: '要見直し', unknown: 'データ不足'};
+  const CONFIDENCE_TEXT = {high: '信頼度 高', medium: '信頼度 中', low: '信頼度 低'};
+  function renderEvaluations(target, items) {
+    target.replaceChildren();
+    for (const m of items) {
+      const li = el('li', undefined, 'home-eval-item '+m.status);
+      const box = el('details'); box.open = m.status === 'warn';
+      const head = el('summary', undefined, 'eval-head');
+      head.append(el('span', STATUS_TEXT[m.status] || '', 'eval-badge'), el('span', m.label, 'eval-label'), el('strong', m.value, 'eval-value'));
+      const meta = el('small', undefined, 'eval-meta'); meta.append(el('span', '目安：'+m.reference));
+      if (CONFIDENCE_TEXT[m.confidence]) meta.append(el('span', CONFIDENCE_TEXT[m.confidence], 'eval-confidence '+m.confidence));
+      box.append(head, el('p', m.detail, 'eval-detail'), meta); li.append(box); target.append(li);
+    }
+  }
   function renderSummary(tiles, text) {
     const box = $('home-summary'); box.replaceChildren();
     for (const t of tiles) {
@@ -319,11 +334,13 @@
     const name = userId ? (typeof currentUserName === 'function' ? currentUserName(userId) : '') : '';
     $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
     if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
-    for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week']) if (!userId) empty($(id), '利用者を選択してください。');
+    for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
     if (!userId) { renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
-    let rows = [], error = null;
+    let rows = [], error = null, metrics = null;
+    const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
     try { rows = await fetchSamples(userId, dayStart(days[0])-6*3600000, dayStart(todayKey)+DAY); } catch (e) { error = e; }
+    metrics = await metricsRequest;
     if (ticket !== serial) return;
     const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
     const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));
@@ -337,6 +354,8 @@
     const todayEntry = energy ? (energy.entries || energy.diaries || []).find(x => x.date === energy.today) : null;
     $('home-source').textContent = error ? error.message : source ? `記録元：${source === 'unknown' ? '不明' : source}` : '';
     const diet = renderDiet(energy, summary);
+    if (metrics) { renderEvaluations($('home-eval-diet'), metrics.diet); renderEvaluations($('home-eval-health'), metrics.health); }
+    else for (const id of ['home-eval-diet', 'home-eval-health']) empty($(id), '評価を取得できませんでした。');
     renderActivity(totals[todayKey], todayEntry);
     const sleptDays = days.filter(d => nights[d]);
     const sleepAvg = sleptDays.length ? sleptDays.reduce((a, d) => a+nights[d].total, 0)/sleptDays.length : null;
@@ -378,7 +397,7 @@
       {label: '収支', value: today.balance == null ? '—' : `${today.balance > 0 ? '+' : today.balance < 0 ? '−' : '±'}${num(Math.abs(today.balance))}`, unit: 'kcal',
         sub: today.basis === 'bmr+active' ? '摂取−基礎代謝−活動' : today.basis === 'bmr' ? '摂取−基礎代謝' : '設定が必要', state: today.balance == null ? '' : today.balance <= 0 ? 'good' : 'warn'}
     ], summaryText({remaining: diet?.remaining ?? null, change7: diet?.change7 ?? null, bpHigh, steps, stepGoal: STEP_GOAL,
-      sleep: night?.total ?? null, sleepAvg: sleptDays.length > 1 ? sleepAvg : null, balance: today.balance}));
+      sleep: night?.total ?? null, sleepAvg: sleptDays.length > 1 ? sleepAvg : null, balance: today.balance, evaluations: metrics?.summary || []}));
   }
   $('home-goal-form').addEventListener('submit', async event => {
     event.preventDefault();

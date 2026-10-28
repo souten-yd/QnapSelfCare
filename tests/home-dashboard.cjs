@@ -65,3 +65,7 @@ assert.equal(h.summaryText({remaining: 0, change7: null, bpHigh: true, steps: 12
   '目標体重に到達しています。血圧が参考上限を超えています。歩数は目標を達成。昨夜の睡眠記録はありません。今日の収支は−300kcal。');
 assert.equal(h.summaryText({remaining: null, change7: null, bpHigh: false, steps: null, stepGoal: 8000, sleep: 7*3600000, sleepAvg: null, balance: null}), '記録がそろうと、ここに今日のまとめを表示します。');
 console.log('Home summary text: passed');
+assert.equal(h.summaryText({remaining: 3.4, change7: null, bpHigh: true, steps: null, stepGoal: 8000, sleep: 7*3600000, sleepAvg: null, balance: null,
+  evaluations: ['減量ペースは週0.41kg減で適正。', '家庭血圧の7日平均は127/81で高値血圧。']}),
+  '目標体重まであと3.4kg。減量ペースは週0.41kg減で適正。家庭血圧の7日平均は127/81で高値血圧。');
+console.log('Home summary evaluations: passed');

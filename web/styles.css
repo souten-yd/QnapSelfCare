@@ -328,3 +328,31 @@ button.chart-cursor-close{margin-left:auto;padding:1px 8px;min-width:30px;min-he
  .home-summary-tile:last-child{grid-column:1/-1}
  .home-summary-tile strong{font-size:20px}
 }
+/* Diet evaluation and body indicators. */
+.home-eval{margin:0 0 18px}
+.home-eval-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}
+.home-eval-grid h3{margin:0 0 8px;font-size:12px;letter-spacing:1px;color:var(--muted)}
+.home-eval-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.home-eval-item{padding:10px 12px;border-radius:12px;background:var(--surface-soft);border-left:4px solid var(--border);min-width:0}
+.home-eval-item.good{border-left-color:var(--good)}.home-eval-item.ok{border-left-color:var(--warning)}.home-eval-item.warn{border-left-color:var(--warn)}
+.home-eval-item.unknown{opacity:.72}
+.eval-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.eval-badge{font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--border);color:var(--muted);white-space:nowrap}
+.home-eval-item.good .eval-badge{color:var(--good);border-color:var(--good)}.home-eval-item.ok .eval-badge{color:var(--warning);border-color:var(--warning)}.home-eval-item.warn .eval-badge{color:var(--warn);border-color:var(--warn)}
+.eval-label{font-size:13px;font-weight:700}
+.eval-value{margin-left:auto;font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.eval-detail{margin:4px 0 2px;font-size:12px;color:var(--secondary-text);line-height:1.6}
+.eval-meta{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10.5px;color:var(--muted)}
+.eval-confidence{font-weight:700}.eval-confidence.low{color:var(--warn)}
+@media(max-width:1000px){.home-eval-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.home-eval{margin-bottom:10px}.eval-value{margin-left:0;width:100%;font-size:16px}}
+.home-eval-item>details>summary{list-style:none;cursor:pointer}
+.home-eval-item>details>summary::-webkit-details-marker{display:none}
+.home-eval-item>details>summary::after{content:"＋";font-size:11px;color:var(--muted);margin-left:4px}
+.home-eval-item>details[open]>summary::after{content:"－"}
+.home-eval-item>details[open]>summary{margin-bottom:0}
+.home-eval-list{gap:6px}
+.home-eval-item{padding:9px 12px}
+@media(max-width:700px){.eval-value{margin-left:auto;width:auto;font-size:14px}.eval-label{font-size:12.5px}}
+.home-eval-item>details>summary{position:relative;padding-right:18px}
+.home-eval-item>details>summary::after{position:absolute;right:0;top:2px;margin:0}
