@@ -196,8 +196,8 @@ button.chart-cursor-close{margin-left:auto;padding:1px 8px;min-width:30px;min-he
 .ah-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px}.ah-grid .card{min-width:0;margin:0}.ah-grid strong{font-size:1.5rem}.ah-plot svg{display:block;width:100%;height:auto}.ah-grid details p{overflow-wrap:anywhere;font-size:.85rem}
 
 /* Home dashboard: today's checks, diet progress, activity and sleep. */
-:root{--ring-track:#e3ece8;--activity:#e0703a;--activity-soft:#f2b48f;--sleep-deep:#4f46a8;--sleep-core:#3d8fc6;--sleep-rem:#a663c7;--sleep-asleep_unspecified:#7f95d2;--good:#1f8a5b;--warn:#b5651d;--hero-a:#0b7d72;--hero-b:#1c9c8a;--hero-c:#2f7fa8}
-:root[data-theme=dark]{--ring-track:#2a3d38;--activity:#f39a68;--activity-soft:#8a5a40;--sleep-deep:#8f86f0;--sleep-core:#68b5e6;--sleep-rem:#cf95ea;--sleep-asleep_unspecified:#9fb1e6;--good:#6fd6a3;--warn:#f0b06a;--hero-a:#0f4f48;--hero-b:#14695e;--hero-c:#1d4f6e}
+:root{--ring-track:#e3ece8;--activity:#e0703a;--activity-soft:#f2b48f;--sleep-deep:#4f46a8;--sleep-core:#3d8fc6;--sleep-rem:#a663c7;--sleep-asleep_unspecified:#7f95d2;--good:#1f8a5b;--warn:#b5651d;--hero-a:#0b7d72;--hero-b:#1c9c8a;--hero-c:#2f7fa8;--heart:#d9485f;--oxygen:#2f86c9}
+:root[data-theme=dark]{--ring-track:#2a3d38;--activity:#f39a68;--activity-soft:#8a5a40;--sleep-deep:#8f86f0;--sleep-core:#68b5e6;--sleep-rem:#cf95ea;--sleep-asleep_unspecified:#9fb1e6;--good:#6fd6a3;--warn:#f0b06a;--hero-a:#0f4f48;--hero-b:#14695e;--hero-c:#1d4f6e;--heart:#ff7a8a;--oxygen:#6cb8f0}
 #overview .home-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;margin:-4px 0 22px;padding:26px 28px;border-radius:20px;color:#fff;
  background:radial-gradient(120% 140% at 100% 0%,var(--hero-c) 0%,transparent 55%),linear-gradient(135deg,var(--hero-a),var(--hero-b));box-shadow:0 14px 30px -18px #0b5d5599}
 #overview .home-hero .eyebrow{color:#ffffffc0;letter-spacing:1.5px}
@@ -493,3 +493,7 @@ details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
 .health-status-list li span{color:var(--muted);font-size:.92em}
 .health-status-list li.ok b{color:var(--success)}
 .health-status-list li.missing b{color:var(--warning)}
+
+.home-grid-vitals{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:700px){.home-grid-vitals{grid-template-columns:1fr}}
+.home-legend .vital-avg{color:var(--c)}.home-legend .vital-range{color:color-mix(in srgb,var(--c) 45%,transparent)}

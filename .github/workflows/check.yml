@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.61 >/dev/null 2>&1; then
-            echo 'Release v0.3.61 already exists; leaving it unchanged.'
+          if gh release view v0.3.62 >/dev/null 2>&1; then
+            echo 'Release v0.3.62 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.61 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.61' \
-            --notes 'Home sleep and heart cards no longer stay empty when data exists: a night with only in-bed time (some watch apps write no sleep stages) is shown as time in bed, and when last night or today has no record the newest night or day of the last 7 days is shown with its date.' \
+          gh release create v0.3.62 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.62' \
+            --notes 'Home adds 7-day heart rate and blood oxygen charts: heart rate shows the daily average as a line over the lowest-to-highest range, and blood oxygen shows each day as a range bar with its average and a 95 percent reference line.' \
             --target "$GITHUB_SHA"
 

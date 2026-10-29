@@ -46,6 +46,11 @@
     const times = asleep.map(clip);
     return {total: union(times), stages, start: Math.min(...times.map(t => t[0])), end: Math.max(...times.map(t => t[1]))};
   }
+  // Daily lowest / highest / average of a vital (heart rate, blood oxygen); null without samples.
+  function vitalRange(values) {
+    const v = (values || []).filter(Number.isFinite); if (!v.length) return null;
+    return {min: Math.min(...v), max: Math.max(...v), avg: v.reduce((a, b) => a+b, 0)/v.length, n: v.length};
+  }
   // Newest day (from the end of `days`) for which pick(day) is truthy; null when none.
   function latestDay(days, pick) { for (let i = days.length-1; i >= 0; i--) if (pick(days[i])) return days[i]; return null; }
   function dietProgress(weights, plan, goalWeight) {
@@ -86,7 +91,7 @@
     return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
   }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, perMetricMainSource, dailyTotals, latestDay, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, vitalRange, union, mainSource, perMetricMainSource, dailyTotals, latestDay, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -322,6 +327,44 @@
     target.append(legend);
   }
 
+  // 7-day range chart: a rounded bar from the day's lowest to highest value with the average as a dot
+  // (the Apple Health / Fitbit style). opts.line also joins the daily averages with a line.
+  function rangeChart(target, days, ranges, opts) {
+    target.replaceChildren();
+    const known = ranges.filter(Boolean);
+    if (!known.length) { target.append(el('p', opts.empty, 'home-empty')); return; }
+    const W = 340, H = 160, left = 30, top = 18, bottom = 26, gap = 10, bw = (W-left-gap*(days.length+1))/days.length;
+    let lo = Math.min(...known.map(r => r.min), opts.ref ?? Infinity), hi = Math.max(...known.map(r => r.max), opts.ref ?? -Infinity);
+    const pad = Math.max(opts.minPad || 2, (hi-lo)*.12); lo = Math.floor(lo-pad); hi = Math.ceil(hi+pad);
+    if (opts.ceil != null) hi = Math.min(hi, opts.ceil);
+    const y = v => top+(hi-v)/(hi-lo || 1)*(H-top-bottom);
+    const g = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': opts.label});
+    for (const v of [hi, Math.round((hi+lo)/2), lo]) {
+      g.append(svg('line', {x1: left, x2: W, y1: y(v), y2: y(v), stroke: 'var(--chart-grid)', 'stroke-width': 1}));
+      g.append(svg('text', {x: left-4, y: y(v)+3.5, 'text-anchor': 'end', 'font-size': 9.5, fill: 'var(--chart-label)'}, String(v)));
+    }
+    if (opts.ref != null) g.append(svg('line', {x1: left, x2: W, y1: y(opts.ref), y2: y(opts.ref), stroke: 'var(--chart-limit)', 'stroke-dasharray': '4 4'}));
+    const cx = i => left+gap+i*(bw+gap)+bw/2, points = [];
+    days.forEach((d, i) => {
+      const r = ranges[i], isToday = i === days.length-1, x = cx(i);
+      if (r) {
+        const w = Math.min(14, bw*.45), top0 = y(r.max), h = Math.max(w, y(r.min)-top0);
+        const bar = svg('rect', {x: x-w/2, y: h === w ? y(r.avg)-w/2 : top0, width: w, height: h, rx: w/2, fill: opts.color, opacity: .28});
+        bar.append(svg('title', {}, `${short(d)} 平均 ${num(r.avg, opts.digits)}・最低 ${num(r.min, opts.digits)}・最高 ${num(r.max, opts.digits)} ${opts.unit}（${r.n}件）`));
+        g.append(bar); points.push([x, y(r.avg)]);
+        g.append(svg('text', {x, y: Math.max(10, top0-5), 'text-anchor': 'middle', 'font-size': 9.5, fill: 'var(--chart-label)'}, num(r.avg, opts.digits)));
+      }
+      g.append(svg('text', {x, y: H-8, 'text-anchor': 'middle', 'font-size': 11, fill: isToday ? 'var(--text)' : 'var(--chart-label)', 'font-weight': isToday ? 700 : 400}, isToday ? '今日' : weekday(d)));
+    });
+    if (opts.line && points.length > 1) g.append(svg('polyline', {points: points.map(p => p.join(',')).join(' '), fill: 'none', stroke: opts.color, 'stroke-width': 2, 'stroke-linejoin': 'round'}));
+    for (const [x, py] of points) g.append(svg('circle', {cx: x, cy: py, r: 3.6, fill: opts.color, stroke: 'var(--surface, #fff)', 'stroke-width': 1.5}));
+    target.append(g);
+    const legend = el('div', undefined, 'home-legend');
+    legend.append(el('span', `● 平均${opts.line ? '（線）' : ''}`, 'vital-avg'), el('span', '▮ 最低〜最高', 'vital-range'));
+    if (opts.refLabel) legend.append(el('span', '┄ '+opts.refLabel, 'goal-line'));
+    legend.style.setProperty('--c', opts.color); target.append(legend);
+  }
+
   function bars(target, days, values, opts) {
     target.replaceChildren();
     if (values.every(v => v == null)) { target.append(el('p', opts.empty, 'home-empty')); return; }
@@ -372,8 +415,8 @@
     const name = userId ? (typeof currentUserName === 'function' ? currentUserName(userId) : '') : '';
     $('home-greeting').replaceChildren(document.createTextNode(greeting(now)+(name ? '、' : '')));
     if (name) { const em = el('em', name); $('home-greeting').append(em, document.createTextNode('さん')); }
-    for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
-    if (!userId) { renderAdviceCard(null); $('home-proposal-notice').hidden = true; renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; return; }
+    for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-heart-week', 'home-oxygen-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
+    if (!userId) { renderAdviceCard(null); $('home-proposal-notice').hidden = true; renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; $('home-heart-avg').textContent = ''; $('home-oxygen-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
     let rows = [], error = null, metrics = null;
     const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
@@ -431,6 +474,12 @@
     const legend = el('div', undefined, 'home-legend'); for (const s of ['deep', 'core', 'rem']) legend.append(el('span', STAGE_NAMES[s], 'stage-label stage-'+s));
     bars($('home-sleep-week'), days, days.map(d => nights[d]), {label: '直近7日の睡眠時間', empty: '睡眠の記録はありません。', goal: 7*3600000, goalLabel: '7時間', stacked: true, legend,
       total: v => v.total, parts: v => SLEEP_STAGES.map(s => ({value: v.stages[s], color: `var(--sleep-${s})`, title: `${STAGE_NAMES[s]} ${hm(v.stages[s])}`})), short: v => (v.total/3600000).toFixed(1)+'h'});
+    const heartDays = days.map(d => vitalRange(totals[d].heart)), oxygenDays = days.map(d => vitalRange(totals[d].oxygen));
+    const avgOf = list => { const k = list.filter(Boolean); return k.length ? k.reduce((a, r) => a+r.avg, 0)/k.length : null; };
+    $('home-heart-avg').textContent = avgOf(heartDays) == null ? '' : `平均 ${num(avgOf(heartDays))} bpm`;
+    $('home-oxygen-avg').textContent = avgOf(oxygenDays) == null ? '' : `平均 ${num(avgOf(oxygenDays))} %`;
+    rangeChart($('home-heart-week'), days, heartDays, {label: '直近7日の心拍数', empty: '心拍数の記録はありません。', unit: 'bpm', color: 'var(--heart)', line: true, minPad: 4});
+    rangeChart($('home-oxygen-week'), days, oxygenDays, {label: '直近7日の血中酸素', empty: '血中酸素の記録はありません。', unit: '%', color: 'var(--oxygen)', ref: 95, refLabel: '目安 95%', ceil: 100, minPad: 1});
     const latest = kind => (typeof chartRecords !== 'undefined' ? chartRecords : []).find(r => r.kind === kind && r.user_id === userId);
     const measuredToday = kind => { const r = latest(kind); return !!r && dayKey(Date.parse(r.measured_at)) === todayKey; };
     const steps = totals[todayKey].steps, night = nights[todayKey], profile = summary?.profile;
