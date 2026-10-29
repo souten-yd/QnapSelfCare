@@ -72,3 +72,8 @@ console.log('Home summary evaluations: passed');
 assert.equal(h.adviceHighlights('## 要点\n- よく歩けました\n## 提案\n- 早く寝る'), '- よく歩けました');
 assert.equal(h.adviceHighlights('前置きのみ'), '前置きのみ');
 console.log('Home advice highlights: passed');
+const mixed = [{metric: 'steps', source: 'iPhone'}, {metric: 'steps', source: 'iPhone'}, {metric: 'steps', source: 'Watch'},
+  {metric: 'heart_rate', source: 'Watch'}, {metric: 'oxygen_saturation', source: 'Watch'}];
+assert.deepEqual(h.perMetricMainSource(mixed).map(r => r.metric + '@' + r.source),
+  ['steps@iPhone', 'steps@iPhone', 'heart_rate@Watch', 'oxygen_saturation@Watch']);   // watch-only vitals are kept
+console.log('Home per-metric source: passed');
