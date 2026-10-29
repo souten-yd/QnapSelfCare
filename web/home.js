@@ -13,6 +13,13 @@
   function union(intervals) { let end = -Infinity, total = 0; for (const [a, b] of [...intervals].sort((x, y) => x[0]-y[0])) { total += Math.max(0, b-Math.max(a, end)); end = Math.max(end, b); } return total; }
   // Several sources (watch + phone) record the same steps; count only the busiest one.
   function mainSource(rows) { const counts = new Map(); for (const r of rows) counts.set(r.source, (counts.get(r.source) || 0)+1); let best = null, n = 0; for (const [s, c] of counts) if (c > n) { best = s; n = c; } return best; }
+  // Each metric keeps its own busiest source: steps may come from the phone while heart rate and
+  // blood oxygen come only from the watch, so one shared source would hide the watch-only metrics.
+  function perMetricMainSource(rows) {
+    const byMetric = new Map(); for (const r of rows) { if (!byMetric.has(r.metric)) byMetric.set(r.metric, []); byMetric.get(r.metric).push(r); }
+    const best = new Map(); for (const [m, list] of byMetric) best.set(m, mainSource(list));
+    return rows.filter(r => best.get(r.metric) === r.source);
+  }
   function dailyTotals(rows, days) {
     const out = Object.fromEntries(days.map(d => [d, {steps: null, distance: null, active_energy: null, heart: [], oxygen: []}]));
     for (const r of rows) {
@@ -74,7 +81,7 @@
     return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
   }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, perMetricMainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -337,10 +344,11 @@
   }
 
   let serial = 0;
-  async function fetchSamples(user, since, until) {
+  async function fetchSamples(user, since, until, metric) {
     const all = []; let total = 0;
     do {
       const p = new URLSearchParams({user_id: user, since: new Date(since).toISOString(), until: new Date(until).toISOString(), limit: '1000', offset: String(all.length)});
+      if (metric) p.set('metric', metric);
       const response = await fetch('/api/apple-health/samples?'+p, {cache: 'no-store'}); const data = await response.json();
       if (!response.ok) throw Error(data.error || 'ヘルスケアの記録を取得できません');
       total = data.total; if (!data.samples.length) break; all.push(...data.samples);
@@ -361,7 +369,15 @@
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
     let rows = [], error = null, metrics = null;
     const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
-    try { rows = await fetchSamples(userId, dayStart(days[0])-6*3600000, dayStart(todayKey)+DAY); } catch (e) { error = e; }
+    // Fetch per metric group so frequent watch samples (heart rate) can never crowd out last night's sleep.
+    try {
+      const end = dayStart(todayKey)+DAY;
+      const groups = await Promise.all([
+        fetchSamples(userId, dayStart(days[0]), end, 'steps,walking_running_distance,active_energy'),
+        fetchSamples(userId, dayStart(days[0])-6*3600000, end, 'sleep'),
+        fetchSamples(userId, dayStart(todayKey), end, 'heart_rate,oxygen_saturation')]);
+      rows = groups.flat();
+    } catch (e) { error = e; }
     metrics = await metricsRequest;
     fetch('/api/wellness/advice?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
       .then(data => { if (ticket === serial) renderAdviceCard(data?.latest || null); }).catch(() => renderAdviceCard(null));
@@ -370,7 +386,7 @@
     if (ticket !== serial) return;
     const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
     const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));
-    const totals = dailyTotals(rows.filter(r => r.source === source), days);
+    const totals = dailyTotals(perMetricMainSource(rows.filter(r => r.metric !== 'sleep')), days);
     const nights = Object.fromEntries(days.map(d => [d, sleepFor(rows.filter(r => r.source === sleepSource), d)]));
     const energy = typeof energyData !== 'undefined' && wellnessProfileUser === userId ? energyData : null;
     const summary = typeof wellnessSummaryData !== 'undefined' && wellnessProfileUser === userId ? wellnessSummaryData : null;

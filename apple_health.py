@@ -294,7 +294,7 @@ def ingest(store, body):
     return result
 
 
-def history(store, user_id, since=None, until=None, limit=200, offset=0):
+def history(store, user_id, since=None, until=None, limit=200, offset=0, metrics=None):
     if not isinstance(user_id, str) or not user_id:
         raise ValueError('user_idが必要です')
     terms, args = ['user_id=?'], [user_id]
@@ -305,6 +305,11 @@ def history(store, user_id, since=None, until=None, limit=200, offset=0):
         terms.append('end_at>=?'); args.append(start)
     if end:
         terms.append('start_at<?'); args.append(end)
+    if metrics:
+        wanted = [m for m in metrics.split(',') if m]
+        if not wanted or len(wanted) > 10 or any(m not in METRICS for m in wanted):
+            raise ValueError('metricが不正です')
+        terms.append('metric IN (' + ','.join('?' * len(wanted)) + ')'); args.extend(wanted)
     where = ' AND '.join(terms)
     with store.connect() as db:
         if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():

@@ -53,6 +53,13 @@ class WebAppTests(unittest.TestCase):
                 self.assertEqual(json.load(response)['inserted'], inserted)
         with self.request('/api/apple-health/samples?user_id=' + user) as response:
             self.assertEqual(json.load(response)['total'], 1)
+        with self.request('/api/apple-health/samples?user_id=' + user + '&metric=heart_rate,oxygen_saturation') as response:
+            self.assertEqual(json.load(response)['total'], 1)
+        with self.request('/api/apple-health/samples?user_id=' + user + '&metric=sleep') as response:
+            self.assertEqual(json.load(response)['total'], 0)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/samples?user_id=' + user + '&metric=unknown')
+        self.assertEqual(error.exception.code, 400)
         body['samples'].append(sample('weight', 80, 'kg'))
         with self.assertRaises(HTTPError) as error: self.request(path, body)
         self.assertEqual(error.exception.code, 400)

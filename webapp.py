@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.57"
+VERSION = "0.3.58"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -170,7 +170,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, apple_health.history(self.store, query.get('user_id', [''])[0],
                 since=query.get('since', [None])[0], until=query.get('until', [None])[0],
                 limit=integer(query.get('limit', ['200'])[0], '件数', 1, 1000),
-                offset=integer(query.get('offset', ['0'])[0], '開始位置', 0, 10000000)))
+                offset=integer(query.get('offset', ['0'])[0], '開始位置', 0, 10000000),
+                metrics=query.get('metric', [None])[0]))
         elif path == "/api/records":
             self._json(200, self.store.records(**self._filters(query),
                 limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),
