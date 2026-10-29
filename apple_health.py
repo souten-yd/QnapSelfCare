@@ -1,5 +1,5 @@
 """Versioned, sample-only Apple Health receiver. No HealthKit/network side effects."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -318,6 +318,31 @@ def history(store, user_id, since=None, until=None, limit=200, offset=0, metrics
         rows = db.execute('SELECT payload,received_at FROM apple_health_samples WHERE ' + where +
                           ' ORDER BY start_at,sample_key LIMIT ? OFFSET ?', args + [limit, offset]).fetchall()
     return {'total': total, 'samples': [dict(json.loads(r[0]), received_at=r[1]) for r in rows]}
+
+
+def receive_status(store, user_id, days=7, now=None):
+    """Per metric: samples in the last `days`, newest sample time, last received time and sources.
+    Lets the user see at a glance whether the Shortcut actually delivers each item."""
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError('user_idが必要です')
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    with store.connect() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise ValueError('利用者が見つかりません')
+        recent = {r[0]: r[1:] for r in db.execute(
+            "SELECT metric, COUNT(*), MAX(end_at), MAX(received_at), GROUP_CONCAT(DISTINCT json_extract(payload,'$.source'))"
+            ' FROM apple_health_samples WHERE user_id=? AND end_at>=? GROUP BY metric', (user_id, since))}
+        ever = {r[0]: r[1:] for r in db.execute(
+            'SELECT metric, MAX(end_at), MAX(received_at) FROM apple_health_samples WHERE user_id=? GROUP BY metric', (user_id,))}
+    items = []
+    for metric in METRICS:
+        count, last_sample, last_received, sources = recent.get(metric, (0, None, None, None))
+        old = ever.get(metric, (None, None))
+        items.append({'metric': metric, 'count': count, 'last_sample_at': last_sample or old[0],
+                      'last_received_at': last_received or old[1],
+                      'sources': sorted(set((sources or '').split(','))) if sources else []})
+    return {'days': days, 'items': items}
 
 
 def backup_rows(db):

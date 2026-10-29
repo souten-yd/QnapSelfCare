@@ -487,3 +487,9 @@ details.more>summary,details.help>summary{font-size:13px;color:var(--link)}
 .ai-activity-list dd{font-weight:600}
 .ai-activity-idle{margin:0;color:var(--good)}
 @media(max-width:700px){.ai-activity-list{grid-template-columns:1fr}.ai-activity-list dd{margin-bottom:4px}}
+.health-status-list{list-style:none;padding:0;margin:8px 0}
+.health-status-list li{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--border)}
+.health-status-list li b{min-width:9em}
+.health-status-list li span{color:var(--muted);font-size:.92em}
+.health-status-list li.ok b{color:var(--success)}
+.health-status-list li.missing b{color:var(--warning)}
