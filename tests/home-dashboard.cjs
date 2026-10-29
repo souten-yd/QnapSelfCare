@@ -85,3 +85,8 @@ assert.equal(h.sleepFor([{...inBed[0], value: 'core'}, inBed[0]], '2026-10-29').
 assert.equal(h.latestDay(['a', 'b', 'c'], d => d !== 'c'), 'b');
 assert.equal(h.latestDay(['a'], () => false), null);
 console.log('Home in-bed sleep and latest-day fallback: passed');
+
+// Daily vital ranges for the 7-day heart rate / blood oxygen charts.
+assert.equal(h.vitalRange([]), null);
+assert.equal(h.vitalRange(undefined), null);
+assert.deepEqual(h.vitalRange([60, 80, 70]), {min: 60, max: 80, avg: 70, n: 3});
