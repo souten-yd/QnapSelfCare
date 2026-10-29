@@ -77,3 +77,11 @@ const mixed = [{metric: 'steps', source: 'iPhone'}, {metric: 'steps', source: 'i
 assert.deepEqual(h.perMetricMainSource(mixed).map(r => r.metric + '@' + r.source),
   ['steps@iPhone', 'steps@iPhone', 'heart_rate@Watch', 'oxygen_saturation@Watch']);   // watch-only vitals are kept
 console.log('Home per-metric source: passed');
+const inBed = [{metric: 'sleep', value: 'in_bed', start_at: '2026-10-28T23:00:00', end_at: '2026-10-29T06:30:00', source: 'HUAWEI'}];
+const bedNight = h.sleepFor(inBed, '2026-10-29');
+assert.equal(bedNight.inBedOnly, true);
+assert.equal(bedNight.total, 7.5 * 3600000);
+assert.equal(h.sleepFor([{...inBed[0], value: 'core'}, inBed[0]], '2026-10-29').inBedOnly, undefined);   // real stages win
+assert.equal(h.latestDay(['a', 'b', 'c'], d => d !== 'c'), 'b');
+assert.equal(h.latestDay(['a'], () => false), null);
+console.log('Home in-bed sleep and latest-day fallback: passed');
