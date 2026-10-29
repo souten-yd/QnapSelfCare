@@ -44,6 +44,9 @@ MAX_HISTORY = 3
 HISTORY_QUESTION_CHARS, HISTORY_ANSWER_CHARS, HISTORY_BUDGET_CHARS = 300, 800, 1200
 ASSISTANT_DEADLINE_SECONDS = 120 * 60  # long enough for QnapAssistant model load + generation up to 3600 s
 INTERACTIVE_WAIT_SECONDS = 120 * 60    # a request from the screen gives up after waiting this long for the AI slot
+LAN_SYNC_TIMEOUT_SECONDS = 30 * 60      # synchronous LAN providers (slow NAS CPUs); OpenRouter keeps 300 s
+DETECT_CACHE_SECONDS = 600
+ASSISTANT_ADMIN_PORT = 11435               # QnapAssistant's management API (serves /v1 and the job API)
 STALL_SECONDS = 180                    # no successful QnapAssistant status for this long is shown as a warning
 
 
@@ -106,6 +109,7 @@ class Coach:
         os.chmod(self.root, 0o700)
         self.store = store
         self._limit = threading.BoundedSemaphore(2)
+        self._detected = {}   # base_url -> (is_qnapassistant, checked_at)
         self._serial = threading.Lock()   # one long AI run at a time (jobs, nightly advice)
         self._sleep = time.sleep
         self._state = threading.Lock()    # guards _current / _interactive_waiting
@@ -200,8 +204,38 @@ class Coach:
         config, prompt = self._consult_payload(user_id, mode, question, consent, history, extra)
         return self.run_prompt(config, prompt)
 
+    def _detect_assistant(self, base):
+        """True when a LAN OpenAI-compatible URL is actually QnapAssistant (it has the async job API)."""
+        hit = self._detected.get(base)
+        if hit and time.monotonic() - hit[1] < DETECT_CACHE_SECONDS:
+            return hit[0]
+        found = False
+        try:
+            opener = build_opener(NoRedirect(), ProxyHandler({}))
+            with opener.open(Request(base[:-3] + '/api/llm/state'), timeout=3) as response:
+                data = json.loads(response.read(64 * 1024))
+            found = response.status == 200 and isinstance(data, dict) and 'status' in data and 'provider' in data
+        except Exception:   # any failure simply means "not QnapAssistant"
+            found = False
+        self._detected[base] = (found, time.monotonic())
+        return found
+
+    def uses_job_api(self, config):
+        """QnapAssistant (selected, or detected behind a "local"/"controldeck" URL) runs through its job API,
+        so slow prompt reading on a NAS CPU is not cut off by a synchronous HTTP timeout."""
+        if config['provider'] == 'qnapassistant':
+            return True
+        base = (config.get('base_url') or '').rstrip('/')
+        if config['provider'] not in ('local', 'controldeck') or not base.endswith('/v1'):
+            return False
+        try:
+            port = urlsplit(base).port
+        except ValueError:
+            return False
+        return port == ASSISTANT_ADMIN_PORT and self._detect_assistant(base)
+
     def _assistant_job_url(self, config, job_id=''):
-        if config['provider'] != 'qnapassistant':
+        if not self.uses_job_api(config):
             raise ValueError('QnapAssistantを相談先に選択してください')
         base = config['base_url'].rstrip('/')
         if not base.endswith('/v1'):
@@ -327,7 +361,7 @@ class Coach:
                         'messages': [{'role': 'user', 'content': 'Reply with OK.'}]}
 
     def test_connection(self):
-        return self._complete(*self._test_payload())
+        return self._complete(*self._test_payload(), timeout=300)
 
     def ask(self, user_id, mode, question, history=None, extra=None, progress=None, cancelled=None, poll=3,
             label='AI相談', interactive=True):
@@ -391,9 +425,11 @@ class Coach:
                 with self._state:
                     self._interactive_waiting -= 1
         cancel_event = threading.Event()
+        job_api = self.uses_job_api(config)
         now = time.monotonic()
         with self._state:
-            self._current = {'label': label, 'interactive': interactive, 'provider': config['provider'], 'stage': 'queued',
+            self._current = {'label': label, 'interactive': interactive,
+                             'provider': 'qnapassistant' if job_api else config['provider'], 'stage': 'queued',
                              'detail': None, 'started': now, 'updated': now, 'errors': 0, 'cancel_event': cancel_event}
         stop = lambda: cancel_event.is_set() or bool(cancelled and cancelled())
         def track(state):
@@ -407,7 +443,7 @@ class Coach:
             if progress:
                 progress(state)
         try:
-            if config['provider'] != 'qnapassistant':
+            if not job_api:
                 track({'status': 'generating'})
                 return self._complete(config, prompt)
             return self._run_assistant_job(config, prompt, track, stop, poll)
@@ -472,9 +508,11 @@ class Coach:
         except ValueError:
             pass
 
-    def _complete(self, config, prompt):
+    def _complete(self, config, prompt, timeout=None):
         if not config['base_url']:
             raise ValueError('NASから到達できるAI接続先URLを保存してください')
+        if timeout is None:
+            timeout = LAN_SYNC_TIMEOUT_SECONDS if config['provider'] != 'openrouter' else 300
         if config['provider'] == 'qnapassistant' and config['model'] == 'auto':
             # QnapAssistant owns provider/model selection; do not override it with a literal "auto".
             prompt.pop('model', None)
@@ -489,7 +527,7 @@ class Coach:
         if not self._limit.acquire(blocking=False):
             raise ValueError('AI相談が実行中です。完了してから再試行してください')
         try:
-            with opener.open(request, timeout=300) as response:
+            with opener.open(request, timeout=timeout) as response:
                 raw = response.read(128 * 1024 + 1)
             if len(raw) > 128 * 1024:
                 raise ValueError('AIの応答が大きすぎます')
@@ -505,7 +543,8 @@ class Coach:
                      503: 'モデルの準備またはサービス起動を待ってください'}
             raise ValueError(f"AI HTTP {error.code}: {hints.get(error.code, '接続先サービスの稼働状態を確認してください')}") from error
         except (TimeoutError, socket.timeout) as error:
-            raise ValueError('AI応答が300秒以内に完了しませんでした。モデルの起動状態・処理速度を確認してください') from error
+            limit = f'{timeout // 60}分' if timeout >= 600 else f'{timeout}秒'
+            raise ValueError(f'AI応答が{limit}以内に完了しませんでした。モデルの起動状態・処理速度を確認してください') from error
         except URLError as error:
             if isinstance(error.reason, (TimeoutError, socket.timeout)):
                 message = 'AI接続がタイムアウトしました。NASからの到達性とモデル起動状態を確認してください'

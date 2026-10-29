@@ -156,3 +156,8 @@ TS-253Be（Celeron J3455）のQnapAssistantは、AVXなしのCPU向けにビル�
 - QnapAssistantの `llama-bench` で、量子化ごとの速度を比べられます。
 
 夜間のアドバイスでAIが失敗した夜は、続く計画の点検をAIなし（規則による判定）で行い、長いAI処理を続けて始めません。
+
+## QnapAssistantの自動判別と時間制限
+
+- 接続先を「ローカルLLM」「ControlDeck」にしていても、URLがQnapAssistant（ポート11435）を指していれば自動で判別し、QnapAssistantの非同期ジョブAPI（最大2時間待ち）で処理します。判別結果は10分間キャッシュします。
+- それ以外のLAN内AIサーバーへの同期リクエストは、最大30分待ちます（以前は300秒）。OpenRouterと接続テストは300秒のままです。

@@ -194,3 +194,49 @@ class JobQueueTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DetectAssistantTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name)
+        self.coach = Coach(self.tmp.name, self.store)
+
+    def test_local_url_on_assistant_port_uses_job_api_when_probe_matches(self):
+        cfg = {'provider': 'local', 'base_url': 'http://192.168.1.10:11435/v1', 'model': 'auto'}
+        probes = []
+        def detect(base):
+            probes.append(base)
+            return True
+        with patch.object(self.coach, '_detect_assistant', side_effect=detect):
+            self.assertTrue(self.coach.uses_job_api(cfg))
+            self.assertTrue(self.coach.uses_job_api(dict(cfg, provider='qnapassistant')))
+            self.assertFalse(self.coach.uses_job_api(dict(cfg, base_url='http://192.168.1.10:8765/v1')))  # no probe
+            self.assertFalse(self.coach.uses_job_api(dict(cfg, provider='openrouter')))
+            self.assertEqual(self.coach._assistant_job_url(cfg), 'http://192.168.1.10:11435/api/llm/jobs')
+        self.assertEqual(probes[0], 'http://192.168.1.10:11435/v1')
+
+    def test_probe_failure_means_not_assistant_and_is_cached(self):
+        calls = []
+        def opener(*args, **kwargs):
+            calls.append(1)
+            raise OSError('refused')
+        with patch('wellness_ai.build_opener', side_effect=opener):
+            self.assertFalse(self.coach._detect_assistant('http://192.168.1.10:11435/v1'))
+            self.assertFalse(self.coach._detect_assistant('http://192.168.1.10:11435/v1'))
+        self.assertEqual(len(calls), 1)
+
+    def test_sync_timeout_is_longer_for_lan_than_openrouter(self):
+        seen = []
+        class Opener:
+            def open(self, request, timeout):
+                seen.append(timeout)
+                raise wellness_ai.socket.timeout('slow')
+        with patch('wellness_ai.build_opener', return_value=Opener()):
+            with self.assertRaisesRegex(ValueError, '30分'):
+                self.coach._complete({'provider': 'local', 'base_url': 'http://192.168.1.10:8765/v1', 'model': 'm'}, {'messages': []})
+            (self.coach._key_path('openrouter')).write_text('sk-or-test')
+            with self.assertRaisesRegex(ValueError, '300秒'):
+                self.coach._complete({'provider': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'm'}, {'messages': []})
+        self.assertEqual(seen, [wellness_ai.LAN_SYNC_TIMEOUT_SECONDS, 300])
