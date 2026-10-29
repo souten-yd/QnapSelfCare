@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.56 >/dev/null 2>&1; then
-            echo 'Release v0.3.56 already exists; leaving it unchanged.'
+          if gh release view v0.3.57 >/dev/null 2>&1; then
+            echo 'Release v0.3.57 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.56 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.56' \
-            --notes 'When the nightly advice fails on the AI (for example a QnapAssistant timeout), the plan check that follows uses rules only instead of starting another long AI job. Docs: model guidance for CPUs without AVX such as the Celeron J3455.' \
+          gh release create v0.3.57 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.57' \
+            --notes 'A Local LLM or ControlDeck URL that points to QnapAssistant (port 11435) is detected and runs through the QnapAssistant job API, so slow NAS processing is no longer cut off after 300 seconds. Synchronous requests to LAN AI servers now wait up to 30 minutes; OpenRouter keeps 300 seconds.' \
             --target "$GITHUB_SHA"
 
