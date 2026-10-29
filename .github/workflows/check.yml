@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.59 >/dev/null 2>&1; then
-            echo 'Release v0.3.59 already exists; leaving it unchanged.'
+          if gh release view v0.3.60 >/dev/null 2>&1; then
+            echo 'Release v0.3.60 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.59 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.59' \
-            --notes 'The records page shows which Apple Health items arrive from the iPhone Shortcut: samples in the last 7 days, the newest time and the source for steps, distance, active energy, heart rate, blood oxygen and sleep, with a hint when an item never arrives. New API GET /api/apple-health/status.' \
+          gh release create v0.3.60 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.60' \
+            --notes 'The Shortcuts receive debug log records an import as soon as it arrives (receiving, with the declared size and elapsed time) and completes the same entry when it is saved, so a slow upload can be told apart from a Shortcut that never sent anything. Docs explain how to keep the heart rate Shortcut fast.' \
             --target "$GITHUB_SHA"
 
