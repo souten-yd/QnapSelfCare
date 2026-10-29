@@ -49,7 +49,19 @@ class HealthDebug:
                     self.timer.start()
             return self.snapshot()
 
-    def record(self, session, status, response, preview='', size=None, truncated=False):
+    def start_request(self, session, declared_bytes=None):
+        """Log an import as soon as it arrives, so a slow upload or slow save shows as 'receiving'
+        instead of looking like the iPhone never sent anything. record() completes the same entry."""
+        with self.lock:
+            if not session or session != self.begin():
+                return None
+            entry = {'received_at': datetime.now(timezone.utc).isoformat(), 'status': 'receiving', 'result': {},
+                     'body_bytes': None, 'declared_bytes': declared_bytes, 'body_preview': '', 'truncated': False,
+                     '_started': time.monotonic()}
+            self.entries.append(entry)
+            return entry
+
+    def record(self, session, status, response, preview='', size=None, truncated=False, entry=None):
         with self.lock:
             if not session or session != self.begin():
                 return
@@ -57,16 +69,27 @@ class HealthDebug:
             result = {k: response[k] for k in ('inserted', 'duplicates', 'received', 'counts', 'start_at', 'end_at', 'processing_ms') if k in response}
             if 'error' in response:
                 result['error'] = str(response['error'])[:1000]
-            self.entries.append({'received_at': datetime.now(timezone.utc).isoformat(),
-                                 'status': status, 'result': result, 'body_bytes': size,
-                                 'body_preview': preview[:8192], 'truncated': truncated})
+            done = {'status': status, 'result': result, 'body_bytes': size,
+                    'body_preview': preview[:8192], 'truncated': truncated}
+            if entry is not None and any(e is entry for e in self.entries):
+                done['elapsed_ms'] = round((time.monotonic() - entry.pop('_started', time.monotonic())) * 1000)
+                entry.update(done)
+            else:
+                self.entries.append(dict(done, received_at=datetime.now(timezone.utc).isoformat()))
 
     def snapshot(self):
         with self.lock:
             active = bool(self.begin())
             return {'enabled': active, 'remaining_seconds': max(0, int(self.deadline - time.monotonic())) if active else 0,
                     'max_entries': 20, 'preview_bytes': 8192,
-                    'entries': copy.deepcopy(list(self.entries))}
+                    'entries': [self._public(e) for e in self.entries]}
+
+    @staticmethod
+    def _public(entry):
+        e = copy.deepcopy({k: v for k, v in entry.items() if k != '_started'})
+        if entry.get('status') == 'receiving' and '_started' in entry:
+            e['elapsed_ms'] = round((time.monotonic() - entry['_started']) * 1000)
+        return e
 
 
 def for_server(server):

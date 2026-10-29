@@ -35,7 +35,10 @@
     [...data.entries].reverse().forEach(entry => {
       const detail = document.createElement('details');
       const summary = document.createElement('summary');
-      summary.textContent = `${entry.received_at} · HTTP ${entry.status} · ${entry.body_bytes ?? '本文未取得'} bytes`;
+      const secs = entry.elapsed_ms == null ? '' : ` · ${(entry.elapsed_ms / 1000).toFixed(1)}秒`;
+      summary.textContent = entry.status === 'receiving'
+        ? `${entry.received_at} · 受信・保存中${entry.declared_bytes ? ` · ${entry.declared_bytes} bytes` : ''}${secs}`
+        : `${entry.received_at} · HTTP ${entry.status} · ${entry.body_bytes ?? '本文未取得'} bytes${secs}`;
       const result = document.createElement('p');
       result.textContent = JSON.stringify(entry.result);
       const preview = document.createElement('pre');

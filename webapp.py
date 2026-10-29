@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.59"
+VERSION = "0.3.60"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -87,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, '_health_debug_session', None):
             health_debug.for_server(self.server).record(self._health_debug_session, status, value,
                 getattr(self, '_health_debug_preview', ''), getattr(self, '_health_debug_size', None),
-                getattr(self, '_health_debug_truncated', False))
+                getattr(self, '_health_debug_truncated', False), getattr(self, '_health_debug_entry', None))
             self._health_debug_session = None
         self._send(status, json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
 
@@ -247,8 +247,13 @@ class Handler(BaseHTTPRequestHandler):
         self._health_debug_preview = ''
         self._health_debug_size = None
         self._health_debug_truncated = False
+        self._health_debug_entry = None
         if method == 'POST' and urlsplit(self.path).path == '/api/apple-health/import':
-            self._health_debug_session = health_debug.for_server(self.server).begin()
+            debug = health_debug.for_server(self.server)
+            self._health_debug_session = debug.begin()
+            declared = self.headers.get('Content-Length')
+            self._health_debug_entry = debug.start_request(self._health_debug_session,
+                int(declared) if declared and declared.isdigit() else None)
         try:
             body = self._body()
             path = urlsplit(self.path).path
