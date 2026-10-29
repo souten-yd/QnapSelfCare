@@ -479,7 +479,7 @@
     $('home-heart-avg').textContent = avgOf(heartDays) == null ? '' : `平均 ${num(avgOf(heartDays))} bpm`;
     $('home-oxygen-avg').textContent = avgOf(oxygenDays) == null ? '' : `平均 ${num(avgOf(oxygenDays))} %`;
     rangeChart($('home-heart-week'), days, heartDays, {label: '直近7日の心拍数', empty: '心拍数の記録はありません。', unit: 'bpm', color: 'var(--heart)', line: true, minPad: 4});
-    rangeChart($('home-oxygen-week'), days, oxygenDays, {label: '直近7日の血中酸素', empty: '血中酸素の記録はありません。', unit: '%', color: 'var(--oxygen)', ref: 95, refLabel: '目安 95%', ceil: 100, minPad: 1});
+    rangeChart($('home-oxygen-week'), days, oxygenDays, {label: '直近7日の血中酸素', empty: '血中酸素の記録はありません。', unit: '%', color: 'var(--oxygen)', line: true, ref: 95, refLabel: '目安 95%', ceil: 100, minPad: 1});
     const latest = kind => (typeof chartRecords !== 'undefined' ? chartRecords : []).find(r => r.kind === kind && r.user_id === userId);
     const measuredToday = kind => { const r = latest(kind); return !!r && dayKey(Date.parse(r.measured_at)) === todayKey; };
     const steps = totals[todayKey].steps, night = nights[todayKey], profile = summary?.profile;

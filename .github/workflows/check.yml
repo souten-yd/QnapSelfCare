@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.62 >/dev/null 2>&1; then
-            echo 'Release v0.3.62 already exists; leaving it unchanged.'
+          if gh release view v0.3.63 >/dev/null 2>&1; then
+            echo 'Release v0.3.63 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.62 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.62' \
-            --notes 'Home adds 7-day heart rate and blood oxygen charts: heart rate shows the daily average as a line over the lowest-to-highest range, and blood oxygen shows each day as a range bar with its average and a 95 percent reference line.' \
+          gh release create v0.3.63 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.63' \
+            --notes 'The Home 7-day blood oxygen chart now joins the daily averages with a line, like the heart rate chart.' \
             --target "$GITHUB_SHA"
 
