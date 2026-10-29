@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.55 >/dev/null 2>&1; then
-            echo 'Release v0.3.55 already exists; leaving it unchanged.'
+          if gh release view v0.3.56 >/dev/null 2>&1; then
+            echo 'Release v0.3.56 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.55 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.55' \
-            --notes 'Send AI prompts as compact text instead of full JSON so they fit small NAS models with a 4096 token context. The nightly advice prompt drops from about 7300 to about 1300 characters, keeping the day comparison, current values, goal and plan, flagged indicators and recent weeks. Follow-up history is trimmed to fit.' \
+          gh release create v0.3.56 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.56' \
+            --notes 'When the nightly advice fails on the AI (for example a QnapAssistant timeout), the plan check that follows uses rules only instead of starting another long AI job. Docs: model guidance for CPUs without AVX such as the Celeron J3455.' \
             --target "$GITHUB_SHA"
 
