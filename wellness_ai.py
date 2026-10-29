@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 import health_metrics
+import prompt_text
 
 DEFAULT = {'provider': 'controldeck', 'base_url': '', 'model': 'auto'}
 PROVIDERS = ('controldeck', 'qnapassistant', 'local', 'openrouter')
@@ -26,19 +27,21 @@ MODE_GUIDE = {
     'diet': '目標体重と期日が無理のない範囲か、減量ペースと安全な下限に照らして検討してください。',
     'review': '計画線・試算・週次実績の差を数値で示し、目標日の延長・摂取・生活活動・運動の調整候補とトレードオフを比較してください。',
     'lifestyle': '歩数・運動時間・睡眠時間と規則性・安静時心拍の目安から、日常に取り入れやすい工夫を示してください。',
-    'daily': 'context.day_reviewは対象日の記録と直前7日平均の比較です。対象日の良かった点と気になる点を週の傾向と比べて評価し、'
+    'daily': '「〇/〇の記録」は対象日と直前7日平均の比較です。対象日の良かった点と気になる点を週の傾向と比べて評価し、'
              '翌日に試せる生活・食事・運動・睡眠・減量の行動を最大3つ、具体的に提案してください。記録がない項目は推測しないでください。',
 }
 SYSTEM_PROMPT = (
     'あなたは個人の健康記録・食事・減量計画の振り返りを支援するアシスタントです。'
     '診断、治療、薬の変更、断定的なカロリー処方はしません。気になる症状や続く異常値は医療機関への相談を勧めます。'
-    'contextの数値だけを根拠にし、ない数値を作りません。測定値・推定値・いつもの設定による仮定を区別します。'
-    'evaluationsは公的ガイドライン等の目安と比べた判定で、status=unknownはデータ不足です。'
+    '渡された記録の数値だけを根拠にし、ない数値を作りません。測定値・推定値・いつもの設定による仮定を区別します。'
+    '評価指標は公的ガイドライン等の目安と比べた判定です。'
     '無理な減量やBMI下限を下回る目標は勧めません。'
     '回答は日本語で、次の見出しを使った簡潔なMarkdownにしてください：'
     '「## 要点」（2〜3行）、「## 根拠になったデータ」（箇条書き、数値つき）、「## 提案」（すぐ試せる行動を最大3つ）、「## 注意」（必要な場合のみ）。'
 )
 MAX_HISTORY = 3
+# Small NAS models often have a 4096-token context: keep the whole prompt well under it.
+HISTORY_QUESTION_CHARS, HISTORY_ANSWER_CHARS, HISTORY_BUDGET_CHARS = 300, 800, 1200
 ASSISTANT_DEADLINE_SECONDS = 120 * 60  # long enough for QnapAssistant model load + generation up to 3600 s
 INTERACTIVE_WAIT_SECONDS = 120 * 60    # a request from the screen gives up after waiting this long for the AI slot
 STALL_SECONDS = 180                    # no successful QnapAssistant status for this long is shown as a warning
@@ -55,7 +58,10 @@ def clean_history(history):
         if not isinstance(turn, dict) or set(turn) != {'question', 'answer'} or \
                 not all(isinstance(turn[k], str) for k in turn):
             raise ValueError('前の相談の形式が不正です')
-        turns.append({'question': turn['question'].strip()[:2000], 'answer': turn['answer'].strip()[:4000]})
+        turns.append({'question': turn['question'].strip()[:HISTORY_QUESTION_CHARS],
+                      'answer': turn['answer'].strip()[:HISTORY_ANSWER_CHARS]})
+    while len(turns) > 1 and sum(len(t['question']) + len(t['answer']) for t in turns) > HISTORY_BUDGET_CHARS:
+        turns.pop(0)  # small NAS models: keep only the newest turns that fit
     return turns
 
 
@@ -176,10 +182,9 @@ class Coach:
         messages = [{'role': 'system', 'content': SYSTEM_PROMPT + MODE_GUIDE[mode]}]
         for turn in turns:
             messages += [{'role': 'user', 'content': turn['question']}, {'role': 'assistant', 'content': turn['answer']}]
-        messages.append({'role': 'user', 'content': json.dumps({'topic': MODES[mode], 'context': context,
-                         'question': question.strip()}, ensure_ascii=False)})
+        messages.append({'role': 'user', 'content': f'テーマ: {MODES[mode]}\n\n{prompt_text.render(context, mode)}\n\n質問: {question.strip()}'})
         prompt = {'model': config['model'], 'stream': False,
-                  'max_tokens': 1400 if mode in ('diet', 'review') else 900, 'messages': messages}
+                  'max_tokens': 1000 if mode in ('diet', 'review') else 800, 'messages': messages}
         return config, prompt
 
     def _evaluations(self, user_id):

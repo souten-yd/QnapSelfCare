@@ -204,7 +204,7 @@ class PlanReviewer:
         if allow_ai and self.coach.settings()['base_url']:
             summary = [{k: o[k] for k in ('id', 'title', 'changes', 'warnings', 'weekly_loss_kg', 'weekly_pct',
                                           'planned_intake_kcal', 'projected_goal_weight', 'projected_gap_kg')} for o in options]
-            question = ('減量計画の見直しが必要かを判断し、context.plan_reviewの修正案を比較してください。'
+            question = ('減量計画の見直しが必要かを判断し、示した修正案（案A〜C）を比較してください。'
                         '最初の行に「推奨: A」のように推奨する案を1つだけ書き、続けて理由とトレードオフ、'
                         '案を選ぶ前に確認したいことを簡潔に説明してください。案にない数値の計画は作らないでください。')
             try:

@@ -230,7 +230,7 @@ class DailyAdvisor:
         if ai['provider'] == 'openrouter' and trigger == 'schedule' and not config['allow_external']:
             self._put(user_id, key, status='review_only', error='外部サービスへの自動送信は許可されていません（記録の比較のみ）')
             return self._get(user_id, key)
-        question = (f'{key}の1日を、直前7日間の傾向（context.day_review）と比べて評価し、'
+        question = (f'{key}の1日を、直前7日間の傾向と比べて評価し、'
                     '翌日に向けた生活・食事・運動・睡眠・減量のアドバイスをください。')
         extra = {'day_review': review, 'review_date': key}
         latest = {}

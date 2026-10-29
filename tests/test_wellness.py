@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from storage import Store
 from wellness import summarize
@@ -101,17 +101,24 @@ class WellnessTests(unittest.TestCase):
                 return Response()
         history = [{'question': '前の質問', 'answer': '前の回答' * 2000}]
         with patch('wellness_ai.build_opener', return_value=Opener()):
+            coach.consult(self.user, 'health', '質問')
+        self.assertIn('記録: まだほとんどありません', json.loads(requests.pop().data)['messages'][-1]['content'])
+        now = datetime.now(timezone.utc)
+        self.store.add_records([{'user_id': self.user, 'kind': 'blood_pressure', 'measured_at': (now - timedelta(days=d)).isoformat(),
+                                 'values': {'systolic': 128, 'diastolic': 82, 'pulse': 66}} for d in range(5)])
+        with patch('wellness_ai.build_opener', return_value=Opener()):
             coach.consult(self.user, 'lifestyle', '睡眠を整えたい', history=history)
         data = json.loads(requests[0].data)
         roles = [m['role'] for m in data['messages']]
         self.assertEqual(roles, ['system', 'user', 'assistant', 'user'])
         self.assertIn('歩数', data['messages'][0]['content'])          # lifestyle guide
         self.assertIn('## 要点', data['messages'][0]['content'])       # structured answer format
-        self.assertEqual(len(data['messages'][2]['content']), 4000)    # previous answer trimmed
-        payload = json.loads(data['messages'][-1]['content'])
-        self.assertEqual(payload['topic'], '運動・睡眠の振り返り')
-        labels = [e['label'] for e in payload['context']['evaluations']]
-        self.assertIn('家庭血圧（7日平均）', labels)
+        self.assertEqual(len(data['messages'][2]['content']), 800)     # previous answer trimmed for small models
+        text = data['messages'][-1]['content']                          # compact text, not JSON
+        self.assertTrue(text.startswith('テーマ: 運動・睡眠の振り返り'))
+        self.assertIn('家庭血圧（7日平均）', text)
+        self.assertTrue(text.endswith('質問: 睡眠を整えたい'))
+        self.assertLess(sum(len(m['content']) for m in data['messages']), 4000)
         for bad in ([{'question': 'q'}], [{'question': 'q', 'answer': 'a'}] * 4, 'text'):
             with self.assertRaises(ValueError):
                 coach.consult(self.user, 'health', '質問', history=bad)
