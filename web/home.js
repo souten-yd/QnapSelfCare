@@ -37,12 +37,17 @@
     const b = dayStart(key) + 18*3600000, a = b - DAY;
     const list = rows.filter(r => r.metric === 'sleep' && Date.parse(r.end_at) > a && Date.parse(r.start_at) < b);
     const clip = r => [Math.max(a, Date.parse(r.start_at)), Math.min(b, Date.parse(r.end_at))];
-    const asleep = list.filter(r => SLEEP_STAGES.includes(r.value));
+    let asleep = list.filter(r => SLEEP_STAGES.includes(r.value)), inBedOnly = false;
+    // Some watch apps (e.g. HUAWEI Health) write only "in bed" time to Apple Health: show it, labelled as such.
+    if (!asleep.length) { asleep = list.filter(r => r.value === 'in_bed'); inBedOnly = asleep.length > 0; }
     if (!asleep.length) return null;
+    if (inBedOnly) { const times = asleep.map(clip); return {total: union(times), stages: {}, inBedOnly, start: Math.min(...times.map(t => t[0])), end: Math.max(...times.map(t => t[1]))}; }
     const stages = Object.fromEntries(SLEEP_STAGES.map(s => [s, union(asleep.filter(r => r.value === s).map(clip))]));
     const times = asleep.map(clip);
     return {total: union(times), stages, start: Math.min(...times.map(t => t[0])), end: Math.max(...times.map(t => t[1]))};
   }
+  // Newest day (from the end of `days`) for which pick(day) is truthy; null when none.
+  function latestDay(days, pick) { for (let i = days.length-1; i >= 0; i--) if (pick(days[i])) return days[i]; return null; }
   function dietProgress(weights, plan, goalWeight) {
     const known = weights.filter(w => Number.isFinite(w.weight));
     if (!known.length) return null;
@@ -81,7 +86,7 @@
     return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
   }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, perMetricMainSource, dailyTotals, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, union, mainSource, perMetricMainSource, dailyTotals, latestDay, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -236,10 +241,11 @@
     else target.append(el('p', `目標まであと ${num(STEP_GOAL-steps)} 歩`, 'home-note'));
   }
 
-  function renderSleep(night, average) {
+  function renderSleep(night, average, dayLabel) {
     const target = $('home-sleep');
-    if (!night) { empty(target, '昨夜の睡眠記録はありません。'); return; }
+    if (!night) { empty(target, '直近7日の睡眠記録はありません。'); return; }
     target.replaceChildren();
+    if (dayLabel) target.append(el('p', `昨夜の記録はありません。最新の記録（${dayLabel}）を表示しています。`, 'home-note'));
     const big = el('div', undefined, 'home-big'); big.append(el('strong', `${Math.floor(night.total/3600000)}`), el('span', '時間'), el('strong', String(Math.round(night.total/60000)%60).padStart(2, '0')), el('span', '分'));
     target.append(big, el('small', `${clock(night.start)} 〜 ${clock(night.end)}`, 'muted'));
     const bar = el('div', undefined, 'home-stage-bar'), legend = el('div', undefined, 'home-legend');
@@ -248,15 +254,17 @@
       const seg = el('span', undefined, 'stage-'+s); seg.style.flexGrow = String(ms); seg.title = `${STAGE_NAMES[s]} ${hm(ms)}`; bar.append(seg);
       const item = el('span', `${STAGE_NAMES[s]} ${hm(ms)}`, 'stage-label stage-'+s); legend.append(item);
     }
-    target.append(bar, legend);
+    if (night.inBedOnly) target.append(el('p', 'ベッドにいた時間です（ウォッチのアプリが睡眠段階をヘルスケアへ書き込んでいません）。', 'home-note'));
+    else target.append(bar, legend);
     if (average != null) { const diff = night.total-average; target.append(el('p', `7日平均 ${hm(average)}（${diff >= 0 ? '+' : '−'}${Math.round(Math.abs(diff)/60000)}分）`, 'home-note')); }
   }
 
-  function renderHeart(today) {
+  function renderHeart(today, dayLabel) {
     const target = $('home-heart');
     const hr = today?.heart || [], ox = today?.oxygen || [];
-    if (!hr.length && !ox.length) { empty(target, '今日の心拍・血中酸素の記録はありません。'); return; }
+    if (!hr.length && !ox.length) { empty(target, '直近7日の心拍・血中酸素の記録はありません。'); return; }
     target.replaceChildren();
+    if (dayLabel) target.append(el('p', `今日の記録はまだありません。最新の記録（${dayLabel}）を表示しています。`, 'home-note'));
     const avg = list => list.reduce((a, b) => a+b, 0)/list.length;
     const grid = el('div', undefined, 'home-stats home-stats-tight');
     grid.append(stat('平均心拍', hr.length ? num(avg(hr)) : '—', hr.length ? 'bpm' : '', hr.length ? `${num(Math.min(...hr))}〜${num(Math.max(...hr))} bpm` : ''),
@@ -375,7 +383,7 @@
       const groups = await Promise.all([
         fetchSamples(userId, dayStart(days[0]), end, 'steps,walking_running_distance,active_energy'),
         fetchSamples(userId, dayStart(days[0])-6*3600000, end, 'sleep'),
-        fetchSamples(userId, dayStart(todayKey), end, 'heart_rate,oxygen_saturation')]);
+        fetchSamples(userId, dayStart(days[0]), end, 'heart_rate,oxygen_saturation')]);
       rows = groups.flat();
     } catch (e) { error = e; }
     metrics = await metricsRequest;
@@ -401,8 +409,12 @@
     renderActivity(totals[todayKey], todayEntry);
     const sleptDays = days.filter(d => nights[d]);
     const sleepAvg = sleptDays.length ? sleptDays.reduce((a, d) => a+nights[d].total, 0)/sleptDays.length : null;
-    renderSleep(nights[todayKey], sleptDays.length > 1 ? sleepAvg : null);
-    renderHeart(totals[todayKey]);
+    const md = key => `${Number(key.slice(5, 7))}/${Number(key.slice(8, 10))}`;
+    const sleepDay = nights[todayKey] ? todayKey : latestDay(days, d => nights[d]);
+    renderSleep(sleepDay ? nights[sleepDay] : null, sleptDays.length > 1 ? sleepAvg : null, sleepDay && sleepDay !== todayKey ? md(sleepDay) : '');
+    const hasVitals = d => totals[d] && (totals[d].heart.length || totals[d].oxygen.length);
+    const vitalDay = hasVitals(todayKey) ? todayKey : latestDay(days, hasVitals);
+    renderHeart(vitalDay ? totals[vitalDay] : null, vitalDay && vitalDay !== todayKey ? md(vitalDay) : '');
     renderEnergy(energy, totals[todayKey].active_energy, true);
     const history = new Map((energy?.history || []).map(x => [x.date, x]));
     const balanceRows = days.map(d => { const h = history.get(d); const intake = h?.intake_kcal ?? (d === energy?.today ? energy?.current?.intake_kcal : null);
