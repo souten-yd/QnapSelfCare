@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.58 >/dev/null 2>&1; then
-            echo 'Release v0.3.58 already exists; leaving it unchanged.'
+          if gh release view v0.3.59 >/dev/null 2>&1; then
+            echo 'Release v0.3.59 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.58 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.58' \
-            --notes 'Home shows heart rate, blood oxygen and sleep again when they come from a different device than steps: each metric now uses its own main source. Home fetches activity, sleep and vitals separately (new metric filter on the samples API), so frequent watch samples cannot crowd out last night sleep.' \
+          gh release create v0.3.59 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.59' \
+            --notes 'The records page shows which Apple Health items arrive from the iPhone Shortcut: samples in the last 7 days, the newest time and the source for steps, distance, active energy, heart rate, blood oxygen and sleep, with a hint when an item never arrives. New API GET /api/apple-health/status.' \
             --target "$GITHUB_SHA"
 

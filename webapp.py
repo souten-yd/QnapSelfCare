@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.58"
+VERSION = "0.3.59"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -166,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
                            'application/json; charset=utf-8', 'selfcare-shortcuts-debug.json')
             else:
                 self._json(200, data)
+        elif path == "/api/apple-health/status":
+            self._json(200, apple_health.receive_status(self.store, query.get('user_id', [''])[0]))
         elif path == "/api/apple-health/samples":
             self._json(200, apple_health.history(self.store, query.get('user_id', [''])[0],
                 since=query.get('since', [None])[0], until=query.get('until', [None])[0],

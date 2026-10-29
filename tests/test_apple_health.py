@@ -246,3 +246,31 @@ class ShortcutsGroupsTests(unittest.TestCase):
         self.assertIsNone(result['start_at'])
 
 if __name__ == '__main__': unittest.main()
+
+
+class ReceiveStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name)
+        self.user = self.store.save_user({'name': 'Test'})['id']
+
+    def test_counts_recent_items_and_reports_missing_ones(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        def at(hours):
+            t = (now - timedelta(hours=hours)).replace(microsecond=0)
+            return t.isoformat().replace('+00:00', 'Z')
+        samples = [dict(metric='steps', start_at=at(2), end_at=at(1), value=500, unit='count', source='iPhone'),
+                   dict(metric='steps', start_at=at(3), end_at=at(2), value=300, unit='count', source='Watch'),
+                   dict(metric='heart_rate', start_at=at(24 * 10), end_at=at(24 * 10), value=70, unit='bpm', source='Watch')]
+        ah.ingest(self.store, dict(schema=1, user_id=self.user, samples=samples))
+        status = {i['metric']: i for i in ah.receive_status(self.store, self.user)['items']}
+        self.assertEqual(set(status), set(ah.METRICS))
+        self.assertEqual(status['steps']['count'], 2)
+        self.assertEqual(status['steps']['sources'], ['Watch', 'iPhone'])
+        self.assertEqual(status['heart_rate']['count'], 0)                 # only older than 7 days
+        self.assertIsNotNone(status['heart_rate']['last_sample_at'])       # but we still say when it last came
+        self.assertEqual((status['sleep']['count'], status['sleep']['last_sample_at']), (0, None))
+        with self.assertRaises(ValueError):
+            ah.receive_status(self.store, 'missing')
