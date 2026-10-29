@@ -166,17 +166,19 @@ class DailyAdvisor:
             self.activity = 'advice'
             row = self._run(user_id, day, trigger)
             if trigger == 'schedule':
-                self._review_plan(user_id, trigger)
+                # If the AI just failed (e.g. timed out on a slow NAS), check the plan by rules only
+                # instead of starting another long AI job right away.
+                self._review_plan(user_id, trigger, ai_ok=not (row and row['status'] in ('failed', 'retry')))
             return row
         finally:
             self.activity = None
             self._lock.release()
 
-    def _review_plan(self, user_id, trigger):
+    def _review_plan(self, user_id, trigger, ai_ok=True):
         """Nightly: check the weight plan and store a revision proposal when needed (never applied automatically)."""
         self.activity = 'plan'
         config, ai = self.settings(), self.coach.settings()
-        allow_ai = bool(ai['base_url']) and (ai['provider'] != 'openrouter' or config['allow_external'] or trigger == 'manual')
+        allow_ai = ai_ok and bool(ai['base_url']) and (ai['provider'] != 'openrouter' or config['allow_external'] or trigger == 'manual')
         try:
             return self.reviewer.review(user_id, trigger, allow_ai=allow_ai, cancelled=self._stop.is_set,
                                         poll=3 if trigger == 'manual' else POLL_SECONDS,

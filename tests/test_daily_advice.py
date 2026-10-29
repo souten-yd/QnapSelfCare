@@ -139,6 +139,11 @@ class DailyAdviceTests(unittest.TestCase):
         self.coach.config['provider'] = 'openrouter'           # external: plan check runs without AI
         self.advisor.run(self.user, date(2026, 10, 25), 'schedule')
         self.assertEqual(calls[-1], ('schedule', False))
+        self.coach.config['provider'] = 'qnapassistant'        # advice AI timed out: no second long AI job
+        self.coach.fail = 'QnapAssistant: モデルの読込または生成が時間切れになりました'
+        self.add_day(date(2026, 10, 24))
+        self.assertEqual(self.advisor.run(self.user, date(2026, 10, 24), 'schedule')['status'], 'failed')
+        self.assertEqual(calls[-1], ('schedule', False))
 
     def test_catch_up_only_within_window_and_yield_to_screen_requests(self):
         self.add_day(date(2026, 10, 27))
