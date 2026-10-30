@@ -176,7 +176,9 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('sleep 2', script)
         self.assertIn('[ -d /share/Container ]', script)
         self.assertIn('python=$(/bin/sh "$root/python3-path"', script)
-        self.assertIn('running && exit 0', script)
+        self.assertIn('selfcare_pid.py" prepare', script)
+        self.assertIn('check_owned', script)
+        self.assertNotIn('running && exit 0', script)
 
     def test_release_versions_are_aligned(self):
         root = Path(__file__).resolve().parents[1]
