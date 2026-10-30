@@ -22,13 +22,19 @@ def owned(pid, root, data):
         if not raw or len(raw) > 16384:
             return None
         args = [os.fsdecode(x) for x in raw.split(b"\0") if x]
-        expected = [str(root / "webapp.py"), "--lan", "--port",
-                    str(PORT), "--data-dir", str(data)]
+        expected_prefix = [str(root / "webapp.py"), "--lan", "--port",
+                           str(PORT), "--data-dir"]
+        # QTS may launch the old service with /share/Container or its
+        # /share/CACHEDEV*_DATA/Container resolved volume path. Both must
+        # identify the same canonical directory; never accept arbitrary paths.
+        exact_data_paths = {str(data), os.path.realpath(data)}
         if not args or len(args) not in (7, 8):
             return None
         if not PYTHON.fullmatch(Path(args[0]).name):
             return None
-        if args[1:] != expected and args[1:] != ["-B"] + expected:
+        command = args[2:] if len(args) == 8 and args[1] == "-B" else args[1:]
+        if (len(command) != 6 or command[:5] != expected_prefix or
+                command[5] not in exact_data_paths):
             return None
         if not PYTHON.fullmatch(Path(os.readlink(base / "exe")).name):
             return None

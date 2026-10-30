@@ -90,6 +90,35 @@ class ServiceTests(unittest.TestCase):
                 subprocess.run(["sh", str(root / "selfcare.sh"), "stop"],
                                env=env, capture_output=True, timeout=18)
 
+    def test_pid_reconciliation_accepts_equivalent_qts_share_alias(self):
+        """Old QTS argv may use /share/CACHEDEV*_DATA rather than /share alias."""
+        import importlib.util
+        import time
+        spec = importlib.util.spec_from_file_location("selfcare_pid", SERVICE / "selfcare_pid.py")
+        pid_helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pid_helper)
+        with tempfile.TemporaryDirectory() as directory:
+            top = Path(directory)
+            root = top / "QnapSelfCare"
+            root.mkdir()
+            (root / "webapp.py").write_text("import time\ntime.sleep(30)\n")
+            volume = top / "actual-volume"
+            volume.mkdir()
+            (top / "Container").symlink_to(volume, target_is_directory=True)
+            alias = top / "Container" / "QnapSelfCare"
+            real = volume / "QnapSelfCare"
+            real.mkdir()
+            old = subprocess.Popen(
+                [sys.executable, str(root / "webapp.py"), "--lan",
+                 "--port", "17863", "--data-dir", str(real)],
+                cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                time.sleep(0.1)
+                self.assertIsNotNone(pid_helper.owned(old.pid, root, alias))
+            finally:
+                old.terminate()
+                old.wait(timeout=5)
+
     def test_stale_pid_file_does_not_kill_foreign_process(self):
         with tempfile.TemporaryDirectory() as directory:
             top = Path(directory)
