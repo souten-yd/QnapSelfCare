@@ -192,6 +192,38 @@ class Store:
         os.chmod(self.path, 0o600)
 
     @contextmanager
+    def keep_wal_alive(self):
+        """Keep an idle SQLite connection open during HTTP service lifetime.
+
+        Read-only requests previously caused the final SQLite handle to close
+        repeatedly, recreating and deleting WAL/SHM and writing filesystem
+        metadata. This connection never starts a long-lived transaction, never
+        owns the application's writes and is closed after all workers stop.
+        All normal transactions still use connect() with synchronous=FULL.
+        """
+        with self.lock:
+            self.require_available()
+            if not self.path.is_file() or self.path.stat().st_size == 0:
+                self.protect('測定DBが消失または空になりました。新規作成を停止しました')
+                self.require_available()
+            uri = self.path.resolve().as_uri() + '?mode=rw'
+            keeper = sqlite3.connect(uri, uri=True, timeout=15, isolation_level=None)
+            try:
+                # Prevent accidental mutations through the keeper. WAL index
+                # bookkeeping is managed internally by SQLite as usual.
+                keeper.execute("PRAGMA query_only=ON")
+                keeper.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+                if keeper.in_transaction:
+                    raise RuntimeError("SQLite keeper must not retain a transaction")
+            except BaseException:
+                keeper.close()
+                raise
+        try:
+            yield
+        finally:
+            keeper.close()
+
+    @contextmanager
     def connect(self):
         with self.lock:
             self.require_available()

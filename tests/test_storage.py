@@ -15,6 +15,48 @@ class StoreTests(unittest.TestCase):
         self.record = {"user_id": self.user["id"], "kind": "blood_pressure", "measured_at": "2026-09-25T07:30:12+09:00",
                        "values": {"systolic": 130, "diastolic": 80, "pulse": 72}, "note": "test"}
 
+    def test_idle_sqlite_keeper_stabilizes_wal_shm_across_readers(self):
+        """Read-only polling must not create/unlink WAL+SHM on each request."""
+        db_path = Path(self.tmp.name) / "measurements.sqlite3"
+        wal = Path(str(db_path) + "-wal")
+        shm = Path(str(db_path) + "-shm")
+        with self.store.keep_wal_alive():
+            # No long-lived transaction or weakened durability setting.
+            with self.store.connect() as db:
+                self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 2)
+                db.execute("INSERT INTO users VALUES(?,?)", ("keeper-test", "Keeper"))
+            self.assertTrue(wal.exists())
+            self.assertTrue(shm.exists())
+            wal_inode, shm_inode = wal.stat().st_ino, shm.stat().st_ino
+            for _ in range(25):
+                self.store.users()
+                self.store.devices()
+                self.store.jobs()
+                self.assertEqual(wal.stat().st_ino, wal_inode)
+                self.assertEqual(shm.stat().st_ino, shm_inode)
+            with self.store.connect() as db:
+                # A passive checkpoint remains possible: idle keeper must not
+                # hold a read transaction that pins the WAL indefinitely.
+                result = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                self.assertEqual(result[0], 0)
+            self.assertTrue(any(u["id"] == "keeper-test" for u in self.store.users()))
+        # Closing is deliberately allowed to clean up WAL/SHM at shutdown.
+        self.assertTrue(db_path.exists())
+
+    def test_keeper_preserves_transaction_rollback_and_durable_records(self):
+        with self.store.keep_wal_alive():
+            self.assertEqual(self.store.add_records([self.record])["inserted"], 1)
+            bad = copy.deepcopy(self.record)
+            bad["values"]["pulse"] = float("nan")
+            with self.assertRaises(ValueError):
+                self.store.add_records([bad])
+            self.assertEqual(self.store.records()["total"], 1)
+            snapshot = self.store.backup()
+            self.assertEqual(len(snapshot["records"]), 1)
+        other = Store(self.tmp.name)
+        self.assertFalse(other.error)
+        self.assertEqual(other.records()["total"], 1)
+
     def test_database_marker_is_not_rewritten_on_restart(self):
         marker = Path(self.tmp.name) / 'database.initialized.json'
         self.assertTrue(marker.is_file())

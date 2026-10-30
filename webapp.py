@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.63"
+VERSION = "0.3.64"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -444,24 +444,26 @@ def serve(args):
     store = Store(Path(args.data_dir) / "data", state_directory=args.data_dir)
     collector = CollectorManager(store)
     protection = ProtectionManager(store)
-    with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
-        server.store, server.collector, server.protection = store, collector, protection
-        server.coach = Coach(args.data_dir, store)
-        server.advisor = DailyAdvisor(store, server.coach)
-        server.ai_jobs = AIJobs(server.coach)
-        server.migration = MigrationManager(args.data_dir)
-        server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
-        collector.start()
-        protection.start()
-        server.advisor.start_scheduler()
-        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
-        print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)
-        try:
-            server.serve_forever()
-        finally:
-            server.advisor.close()
-            protection.close()
-            collector.close()
+    # Keep WAL/SHM stable during serving; close only after workers and requests.
+    with store.keep_wal_alive():
+        with ThreadingHTTPServer(("0.0.0.0" if args.lan else "127.0.0.1", args.port), Handler) as server:
+            server.store, server.collector, server.protection = store, collector, protection
+            server.coach = Coach(args.data_dir, store)
+            server.advisor = DailyAdvisor(store, server.coach)
+            server.ai_jobs = AIJobs(server.coach)
+            server.migration = MigrationManager(args.data_dir)
+            server.updates = UpdateManager(args.data_dir, ROOT, VERSION, architecture(), args.port)
+            collector.start()
+            protection.start()
+            server.advisor.start_scheduler()
+            signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
+            print(f"QnapSelfCare {VERSION} listening on {server.server_address}; data: {store.path}", flush=True)
+            try:
+                server.serve_forever()
+            finally:
+                server.advisor.close()
+                protection.close()
+                collector.close()
 
 
 if __name__ == "__main__":
