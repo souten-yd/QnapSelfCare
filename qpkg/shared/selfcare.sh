@@ -12,13 +12,11 @@ pidfile="$root/selfcare.pid"
 data_dir=${SELFCARE_DATA_DIR:-/share/Container/QnapSelfCare}
 logfile="$data_dir/logs/selfcare.log"
 
-running() {
-    [ -f "$pidfile" ] || return 1
-    pid=$(cat "$pidfile")
-    case "$pid" in *[!0-9]*|'') return 1;; esac
-    [ -r "/proc/$pid/cmdline" ] || return 1
-    command_line=$(tr '\000' ' ' < "/proc/$pid/cmdline")
-    case "$command_line" in *"$root/webapp.py"*) kill -0 "$pid" 2>/dev/null;; *) return 1;; esac
+resolve_python() {
+    /bin/sh "$root/python3-path"
+}
+check_owned() {
+    "$python" -B "$root/selfcare_pid.py" check "$root" "$data_dir" "$pidfile"
 }
 
 case "${1:-}" in
@@ -27,7 +25,6 @@ case "${1:-}" in
             enabled=$(/sbin/getcfg "$name" Enable -u -d FALSE -f "$config")
             [ "$enabled" = TRUE ] || { echo "$name is disabled" >&2; exit 1; }
         fi
-        running && exit 0
         umask 077
         # QTS can start QPKGs before storage volumes, shared-folder aliases
         # and the Python QPKG have finished initializing after a NAS reboot.
@@ -45,7 +42,7 @@ case "${1:-}" in
             esac
             if [ "$ready" = yes ]; then
                 mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
-                if python=$(/bin/sh "$root/python3-path" 2>> "$logfile"); then
+                if python=$(/bin/sh "$root/python3-path" 2>/dev/null); then
                     break
                 fi
             fi
@@ -56,27 +53,32 @@ case "${1:-}" in
             sleep 2
             elapsed=$((elapsed + 2))
         done
+        # Reconcile only verified old QPKG servers, including QTS deleted cwd.
+        # Exit code 10 means the verified port is free for a new server.
+        if "$python" -B "$root/selfcare_pid.py" prepare "$root" "$data_dir" "$pidfile"; then
+            exit 0
+        else
+            result=$?
+            [ "$result" -eq 10 ] || exit 1
+        fi
         rm -f "$root/admin-token"
-        "$python" "$root/webapp.py" --lan --port 17863 --data-dir "$data_dir" < /dev/null > "$logfile" 2>&1 &
+        # -B avoids .pyc filesystem writes. A fixed cwd avoids QTS temp dirs.
+        (cd "$root" && exec "$python" -B "$root/webapp.py" --lan --port 17863 --data-dir "$data_dir") < /dev/null > "$logfile" 2>&1 &
         echo $! > "$pidfile"
         sleep 1
-        running || { rm -f "$pidfile"; echo "Web UI failed to start; check $logfile" >&2; exit 1; }
+        check_owned || { rm -f "$pidfile"; echo "Web UI failed to start with verified PID; check $logfile" >&2; exit 1; }
         ;;
     stop)
-        if running; then
-            kill "$(cat "$pidfile")"
-            count=0
-            while running; do
-                count=$((count + 1))
-                [ "$count" -lt 15 ] || { echo 'Web service did not stop; refusing overlapping restart' >&2; exit 1; }
-                sleep 1
-            done
-        fi
-        rm -f "$pidfile"
+        python=$(resolve_python) || exit 1
+        "$python" -B "$root/selfcare_pid.py" stop "$root" "$data_dir" "$pidfile"
+        ;;
+    status)
+        python=$(resolve_python) || exit 1
+        "$python" -B "$root/selfcare_pid.py" status "$root" "$data_dir" "$pidfile"
         ;;
     restart)
         "$0" stop
         "$0" start
         ;;
-    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 2;;
+    *) echo "Usage: $0 {start|stop|status|restart}" >&2; exit 2;;
 esac
