@@ -201,6 +201,11 @@ class Store:
         owns the application's writes and is closed after all workers stop.
         All normal transactions still use connect() with synchronous=FULL.
         """
+        # Recovery mode must serve diagnostics/backups without touching a
+        # missing or corrupt DB; never block the read-only recovery UI.
+        if self.error:
+            yield
+            return
         with self.lock:
             self.require_available()
             if not self.path.is_file() or self.path.stat().st_size == 0:

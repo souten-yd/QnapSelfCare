@@ -42,7 +42,7 @@ case "${1:-}" in
             esac
             if [ "$ready" = yes ]; then
                 mkdir -p "$data_dir/logs" "$data_dir/data" "$data_dir/config"
-                if python=$(resolve_python 2>/dev/null); then
+                if python=$(/bin/sh "$root/python3-path" 2>/dev/null); then
                     break
                 fi
             fi
