@@ -44,3 +44,16 @@ class ColumnTests(unittest.TestCase):
         with patch.object(ah,'MAX_SAMPLES',1),self.assertRaises(ValueError):
             ah.ingest(self.store,self.body(self.row))
         self.assertEqual(ah.ingest(self.store,self.body(dict(start=[],end=[],value=[])))['received'],0)
+
+    def test_english_sleep_labels_replay_and_atomic_unknown(self):
+        row = dict(self.row, value=['REM', 'Core'])
+        first = ah.ingest(self.store, self.body(row, 'sleep', ''))
+        self.assertEqual(first['inserted'], 2)
+        for values in (['rem', 'core'], ['レム', 'コア']):
+            self.assertEqual(ah.ingest(self.store, self.body(dict(row,value=values),'sleep',''))['duplicates'], 2)
+        deep = dict(start=self.row['start'][0], end=self.row['end'][0], value='Deep')
+        self.assertEqual(ah.ingest(self.store,self.body([deep],'sleep',''))['inserted'],1)
+        self.assertEqual(ah.ingest(self.store,self.body([dict(deep,value='deep')],'sleep',''))['duplicates'],1)
+        with self.assertRaises(ValueError):
+            ah.ingest(self.store,self.body(dict(row,value=['Deep','Unrecognized']),'sleep',''))
+        self.assertEqual(ah.history(self.store,self.user)['total'],3)
