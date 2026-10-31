@@ -1,0 +1,29 @@
+name: Publish prebuilt v0.3.67
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-prebuilt-0.3.67.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify prebuilt packages
+        working-directory: release-artifacts/v0.3.67
+        run: sha256sum --check SHA256SUMS
+      - name: Publish locally built release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.67 >/dev/null 2>&1; then
+            echo 'Release v0.3.67 already exists; refusing to overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.67 release-artifacts/v0.3.67/*.qpkg release-artifacts/v0.3.67/SHA256SUMS \
+            --target 1902de86a7e31823839c2906f8dd060413b247ca \
+            --title 'QnapSelfCare 0.3.67' \
+            --notes 'Accept REM, Core and Deep sleep labels from iPhone Shortcuts. Preserve atomic validation and deduplication. QPKGs built locally with QDK 2.5.3. This workflow only verifies checksums and uploads prebuilt files; it does not run tests or builds.'
