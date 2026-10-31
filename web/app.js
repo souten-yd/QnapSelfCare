@@ -58,6 +58,7 @@ async function refreshHistory(){const p=filters(true);$('export').href='/api/exp
 // Which Apple Health items the iPhone Shortcut actually delivers (sample counts, newest time, source).
 const HEALTH_ITEMS={steps:'歩数',walking_running_distance:'距離',active_energy:'アクティブエネルギー',heart_rate:'心拍数',oxygen_saturation:'血中酸素',sleep:'睡眠'};
 async function refreshHealthStatus(){const box=$('ah-status-list');if(!box)return;const userId=$('current-user').value;box.replaceChildren();
+ const download=$('ah-export');download.hidden=!userId;if(userId)download.href='/api/apple-health/export.csv?user_id='+encodeURIComponent(userId);else download.removeAttribute('href');
  if(!userId){box.append(element('p','利用者を選択してください。','muted'));return;}
  const data=await api('/api/apple-health/status?user_id='+encodeURIComponent(userId));$('ah-status-days').textContent='直近'+data.days+'日';
  const list=element('ul',undefined,'health-status-list');let missing=[];

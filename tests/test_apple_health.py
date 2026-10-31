@@ -1,4 +1,6 @@
 import copy
+import csv
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -21,6 +23,28 @@ class AppleHealthTests(unittest.TestCase):
 
     def send(self, samples, user=None):
         return ah.ingest(self.store, dict(schema=1, user_id=user or self.user, samples=samples))
+
+    def test_export_all_samples_and_user_isolation(self):
+        rows = [dict(sample('steps', i, 'count'), source_id=str(i)) for i in range(1101)]
+        rows.append(dict(sample('sleep', 'rem', None), source='=formula,改行\n次'))
+        self.send(rows)
+        other = self.store.save_user({'name': 'Other'})['id']
+        self.send([sample()], other)
+        content = ah.export_csv(self.store, self.user)
+        self.assertTrue(content.startswith('\ufeff'))
+        exported = list(csv.DictReader(io.StringIO(content.lstrip('\ufeff'))))
+        self.assertEqual(len(exported), 1102)
+        self.assertEqual({r['user_id'] for r in exported}, {self.user})
+        self.assertTrue(all(r['sample_key'] and r['received_at'] for r in exported))
+        self.assertIn("'=formula,改行\n次", [r['source'] for r in exported])
+        self.assertEqual({r['source_id'] for r in exported if r['metric'] == 'steps'},
+                         {str(i) for i in range(1101)})
+        self.assertEqual(ah.history(self.store, self.user)['total'], 1102)
+        empty = self.store.save_user({'name': 'Empty'})['id']
+        self.assertEqual(len(list(csv.reader(io.StringIO(ah.export_csv(self.store, empty))))), 1)
+        for invalid in ('', 'missing'):
+            with self.assertRaises(ValueError):
+                ah.export_csv(self.store, invalid)
 
     def test_six_metrics_units_durability_and_no_legacy_changes(self):
         self.store.add_records([dict(user_id=self.user, kind='body_composition',

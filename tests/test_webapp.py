@@ -40,6 +40,22 @@ class WebAppTests(unittest.TestCase):
         if header: headers['X-SelfCare-Request'] = '1'
         return urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=3)
 
+    def test_apple_health_csv_download(self):
+        from test_apple_health import sample
+        import apple_health
+        user = self.server.store.save_user({'name': 'CSV'})['id']
+        apple_health.ingest(self.server.store, dict(schema=1, user_id=user, samples=[sample()]))
+        with self.request('/api/apple-health/export.csv?user_id=' + user) as response:
+            self.assertIn('text/csv', response.headers['Content-Type'])
+            self.assertIn('attachment;', response.headers['Content-Disposition'])
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            body = response.read().decode('utf-8-sig')
+            self.assertIn('received_at', body)
+            self.assertIn('heart_rate', body)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/export.csv')
+        self.assertEqual(error.exception.code, 400)
+
     def test_apple_health_http_contract(self):
         from test_apple_health import sample
         user = self.server.store.save_user({'name': 'Health'})['id']
