@@ -185,6 +185,41 @@ def text_records(value, name, maximum):
     return result
 
 
+def expand_columns(rows, maximum):
+    """Expand aligned Shortcuts columns without guessing, filtering or sorting."""
+    result = []
+    fields = ('start', 'end', 'value')
+    for row in rows:
+        columnar = any(isinstance(row.get(k), list) or
+                       (isinstance(row.get(k), str) and any(c in row[k] for c in ('\n', '\r', '\\n')))
+                       for k in fields)
+        if not columnar:
+            result.append(row)
+        else:
+            if set(row) != set(fields):
+                raise ValueError('一覧形式はstart/end/valueの3項目のみ指定してください')
+            columns = {}
+            for key in fields:
+                value = row[key]
+                if isinstance(value, str):
+                    value = value.replace('\r\n', '\n').replace('\r', '\n').replace('\\n', '\n').split('\n')
+                if not isinstance(value, list):
+                    raise ValueError('一覧形式のstart/end/valueはすべて配列または改行文字列にしてください')
+                if any(v is None or isinstance(v, (dict, list)) or
+                       (isinstance(v, str) and not v.strip()) for v in value):
+                    raise ValueError(key + 'の一覧に空行・欠損・入れ子があります')
+                columns[key] = value
+            sizes = [len(columns[k]) for k in fields]
+            if len(set(sizes)) != 1:
+                raise ValueError(f'一覧の件数が一致しません: start={sizes[0]}, end={sizes[1]}, value={sizes[2]}')
+            if len(result) + sizes[0] > maximum:
+                raise ValueError('1リクエストは最大50000サンプルです')
+            result.extend(dict(zip(fields, values)) for values in zip(*(columns[k] for k in fields)))
+        if len(result) > maximum:
+            raise ValueError('1リクエストは最大50000サンプルです')
+    return result
+
+
 def shortcuts_body(body):
     if set(body) != {'schema', 'user_id', 'groups'}:
         raise ValueError('schema:2, user_id, groupsを指定してください')
@@ -194,7 +229,7 @@ def shortcuts_body(body):
         group = dict(group)
         if 'samples' not in group:
             raise ValueError('groupにはtype, source, unit, samplesが必要です')
-        group['samples'] = text_records(group['samples'], 'samples', MAX_SAMPLES)
+        group['samples'] = expand_columns(text_records(group['samples'], 'samples', MAX_SAMPLES), MAX_SAMPLES - total)
         total += len(group['samples'])
         if total > MAX_SAMPLES:
             raise ValueError('1リクエストは最大50000サンプルです')

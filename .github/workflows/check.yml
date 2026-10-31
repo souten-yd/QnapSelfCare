@@ -38,13 +38,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.65 >/dev/null 2>&1; then
-            echo 'Release v0.3.65 already exists; leaving it unchanged.'
+          if gh release view v0.3.66 >/dev/null 2>&1; then
+            echo 'Release v0.3.66 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.65 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.65' \
-            --notes 'Export full iPhone Shortcuts debug request bodies and all retained entries; keep captures available after the ten-minute recording window. Explicitly report capacity limits.' \
+          gh release create v0.3.66 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.66' \
+            --notes 'Import aligned iPhone Shortcuts date and value columns on the server, with strict length validation and existing deduplication.' \
             --target "$GITHUB_SHA"
 

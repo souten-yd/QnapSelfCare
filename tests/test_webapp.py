@@ -71,6 +71,25 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error: self.request(path, body)
         self.assertEqual(error.exception.code, 503)
 
+    def test_shortcuts_columns_http_and_atomic_failure(self):
+        user = self.server.store.save_user({'name': 'Column HTTP'})['id']
+        columns = dict(start='2026-10-30T01:00:00+09:00\n2026-10-30T02:00:00+09:00',
+                       end='2026-10-30T01:01:00+09:00\n2026-10-30T02:01:00+09:00', value='72\n80')
+        body = dict(schema=2, user_id=user, groups=dict(type='heart_rate', source='unknown', unit='bpm',
+                    samples=json.dumps(columns)))
+        for inserted in (2, 0):
+            with self.request('/api/apple-health/import', body) as response:
+                result = json.load(response)
+            self.assertEqual(result['received'], 2)
+            self.assertEqual(result['inserted'], inserted)
+        columns['value'] = '72'
+        body['groups']['samples'] = json.dumps(columns)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/apple-health/import', body)
+        self.assertEqual(error.exception.code, 400)
+        with self.server.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM apple_health_samples').fetchone()[0], 2)
+
     def test_grouped_large_http_and_debug_summary(self):
         from datetime import datetime, timedelta, timezone
         from health_debug import for_server
