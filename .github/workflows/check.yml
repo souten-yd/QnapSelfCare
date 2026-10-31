@@ -1,34 +1,7 @@
 name: check
+# Run only when explicitly requested; ordinary development is validated locally.
 on:
-  pull_request:
-    paths:
-      - '*.py'
-      - 'bluetooth/**'
-      - 'homehub/**'
-      - 'licenses/**'
-      - 'requirements-ble.txt'
-      - 'package*.json'
-      - 'tests/**'
-      - 'qpkg/**'
-      - 'scripts/**'
-      - 'web/**'
-      - 'webapp.py'
-      - '.github/workflows/check.yml'
-  push:
-    branches: [main]
-    paths:
-      - '*.py'
-      - 'bluetooth/**'
-      - 'homehub/**'
-      - 'licenses/**'
-      - 'requirements-ble.txt'
-      - 'package*.json'
-      - 'tests/**'
-      - 'qpkg/**'
-      - 'scripts/**'
-      - 'web/**'
-      - 'webapp.py'
-      - '.github/workflows/check.yml'
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -61,7 +34,7 @@ jobs:
       - run: bash scripts/build-qpkg.sh x86_64 "$PWD/dist"
       - run: bash scripts/build-qpkg.sh arm_64 "$PWD/dist"
       - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
