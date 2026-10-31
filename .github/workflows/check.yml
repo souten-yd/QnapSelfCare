@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.64 >/dev/null 2>&1; then
-            echo 'Release v0.3.64 already exists; leaving it unchanged.'
+          if gh release view v0.3.65 >/dev/null 2>&1; then
+            echo 'Release v0.3.65 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.64 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.64' \
-            --notes 'Reduce QNAP RAID journal churn by holding a transaction-free SQLite WAL keeper while serving; strictly reconcile only verified orphaned QnapSelfCare QPKG processes at startup. Preserve SQLite FULL durability and offline restore.' \
+          gh release create v0.3.65 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.65' \
+            --notes 'Export full iPhone Shortcuts debug request bodies and all retained entries; keep captures available after the ten-minute recording window. Explicitly report capacity limits.' \
             --target "$GITHUB_SHA"
 

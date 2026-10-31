@@ -92,6 +92,11 @@ class WebAppTests(unittest.TestCase):
         self.assertTrue(entry['truncated'])
         self.assertEqual(entry['result']['counts']['heart_rate'], 50000)
         self.assertIn('processing_ms', entry['result'])
+        with self.request('/api/apple-health/debug/download') as response:
+            full = json.load(response)
+        self.assertEqual(json.loads(full['entries'][-1]['body']), body)
+        self.assertTrue(full['complete'])
+        self.assertNotIn('body', entry)
         rows.append(rows[-1])
         with self.assertRaises(HTTPError) as error:
             self.request('/api/apple-health/import', body)
@@ -131,6 +136,8 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(captured['entries'][0]['result']['duplicates'], 1)
         self.assertEqual(captured['entries'][1]['body_preview'], '')
         self.assertEqual(captured['entries'][2]['body_preview'], '{"samples":broken}')
+        self.assertEqual(captured['entries'][2]['body'], '{"samples":broken}')
+        self.assertEqual(json.loads(captured['entries'][0]['body']), data)
         self.assertNotIn('secret', json.dumps(captured))
         self.assertNotIn('body_preview', json.dumps(self.server.store.backup()))
         with self.request('/api/apple-health/debug', {'action': 'stop'}): pass

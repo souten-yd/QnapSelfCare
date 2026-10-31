@@ -21,11 +21,12 @@
     clearTimeout(expiryTimer);
     if (data.enabled) expiryTimer = setTimeout(() => {
       entries.replaceChildren();
-      status.textContent = '記録期限に達しました。必要なら受信状況を更新してください。';
+      status.textContent = '記録期限に達しました。記録済みの全文をダウンロードできます。';
     }, (data.remaining_seconds + 1) * 1000);
     status.textContent = data.enabled
-      ? `記録中：残り約${data.remaining_seconds}秒・${data.entries.length}件（この表示は更新時点）`
-      : '停止中：保持していたログは消去されています';
+      ? `記録中：残り約${data.remaining_seconds}秒・${data.total_entries ?? data.entries.length}件（この表示は更新時点）`
+      : `停止中：記録${data.total_entries ?? data.entries.length}件。全文をダウンロードできます`;
+    if (data.omitted) status.textContent += `・容量／件数上限により${data.omitted}件の記録または本文が欠落しています`;
     entries.replaceChildren();
     if (!data.entries.length) {
       const empty = document.createElement('p');
@@ -48,7 +49,7 @@
       detail.append(summary, result, preview);
       if (entry.truncated) {
         const notice = document.createElement('p');
-        notice.textContent = '本文プレビューは先頭8 KiBまでです。実際の受信処理は本文全体を対象にします。';
+        notice.textContent = '本文プレビューは先頭8 KiBまでです。全文ダウンロードには受信本文全体を含みます（容量上限時は欠落を表示）。';
         detail.append(notice);
       }
       entries.append(detail);
