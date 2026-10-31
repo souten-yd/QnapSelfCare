@@ -1,0 +1,29 @@
+name: Publish prebuilt v0.3.68
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-prebuilt-0.3.68.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify prebuilt packages
+        working-directory: release-artifacts/v0.3.68
+        run: sha256sum --check SHA256SUMS
+      - name: Publish locally built release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.68 >/dev/null 2>&1; then
+            echo 'Release v0.3.68 already exists; refusing to overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.68 release-artifacts/v0.3.68/*.qpkg release-artifacts/v0.3.68/SHA256SUMS \
+            --target a54be9681ec8b0004e1410330950fa240d96f903 \
+            --title 'QnapSelfCare 0.3.68' \
+            --notes 'Export all stored Apple Health samples for the selected user as CSV. QPKGs built locally with QDK 2.5.3. This workflow only verifies checksums and uploads prebuilt files; it does not run tests or builds.'
