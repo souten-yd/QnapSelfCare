@@ -38,13 +38,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.67 >/dev/null 2>&1; then
-            echo 'Release v0.3.67 already exists; leaving it unchanged.'
+          if gh release view v0.3.68 >/dev/null 2>&1; then
+            echo 'Release v0.3.68 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.67 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.67' \
-            --notes 'Accept REM, Core and Deep sleep labels from iPhone Shortcuts while preserving validation and deduplication.' \
+          gh release create v0.3.68 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.68' \
+            --notes 'Add daily minimum labels while preserving average labels on heart rate and blood oxygen charts.' \
             --target "$GITHUB_SHA"
 

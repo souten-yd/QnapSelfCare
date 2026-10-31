@@ -333,7 +333,7 @@
     target.replaceChildren();
     const known = ranges.filter(Boolean);
     if (!known.length) { target.append(el('p', opts.empty, 'home-empty')); return; }
-    const W = 340, H = 160, left = 30, top = 18, bottom = 26, gap = 10, bw = (W-left-gap*(days.length+1))/days.length;
+    const W = 340, H = 176, left = 30, top = 24, bottom = 38, gap = 10, bw = (W-left-gap*(days.length+1))/days.length;
     let lo = Math.min(...known.map(r => r.min), opts.ref ?? Infinity), hi = Math.max(...known.map(r => r.max), opts.ref ?? -Infinity);
     const pad = Math.max(opts.minPad || 2, (hi-lo)*.12); lo = Math.floor(lo-pad); hi = Math.ceil(hi+pad);
     if (opts.ceil != null) hi = Math.min(hi, opts.ceil);
@@ -349,10 +349,12 @@
       const r = ranges[i], isToday = i === days.length-1, x = cx(i);
       if (r) {
         const w = Math.min(14, bw*.45), top0 = y(r.max), h = Math.max(w, y(r.min)-top0);
-        const bar = svg('rect', {x: x-w/2, y: h === w ? y(r.avg)-w/2 : top0, width: w, height: h, rx: w/2, fill: opts.color, opacity: .28});
+        const barTop = h === w ? y(r.avg)-w/2 : top0;
+        const bar = svg('rect', {x: x-w/2, y: barTop, width: w, height: h, rx: w/2, fill: opts.color, opacity: .28});
         bar.append(svg('title', {}, `${short(d)} 平均 ${num(r.avg, opts.digits)}・最低 ${num(r.min, opts.digits)}・最高 ${num(r.max, opts.digits)} ${opts.unit}（${r.n}件）`));
         g.append(bar); points.push([x, y(r.avg)]);
-        g.append(svg('text', {x, y: Math.max(10, top0-5), 'text-anchor': 'middle', 'font-size': 9.5, fill: 'var(--chart-label)'}, num(r.avg, opts.digits)));
+        g.append(svg('text', {x, y: barTop-5, class: 'vital-avg-label', 'text-anchor': 'middle', 'font-size': 9.5, fill: 'var(--chart-label)'}, num(r.avg, opts.digits)));
+        g.append(svg('text', {x, y: barTop+h+12, class: 'vital-min-label', 'text-anchor': 'middle', 'font-size': 9.5, fill: 'var(--chart-label)'}, num(r.min, opts.digits)));
       }
       g.append(svg('text', {x, y: H-8, 'text-anchor': 'middle', 'font-size': 11, fill: isToday ? 'var(--text)' : 'var(--chart-label)', 'font-weight': isToday ? 700 : 400}, isToday ? '今日' : weekday(d)));
     });
@@ -360,7 +362,7 @@
     for (const [x, py] of points) g.append(svg('circle', {cx: x, cy: py, r: 3.6, fill: opts.color, stroke: 'var(--surface, #fff)', 'stroke-width': 1.5}));
     target.append(g);
     const legend = el('div', undefined, 'home-legend');
-    legend.append(el('span', `● 平均${opts.line ? '（線）' : ''}`, 'vital-avg'), el('span', '▮ 最低〜最高', 'vital-range'));
+    legend.append(el('span', `● 平均${opts.line ? '（線）' : ''}`, 'vital-avg'), el('span', '▮ 最低〜最高（下：最低値）', 'vital-range'));
     if (opts.refLabel) legend.append(el('span', '┄ '+opts.refLabel, 'goal-line'));
     legend.style.setProperty('--c', opts.color); target.append(legend);
   }
