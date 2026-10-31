@@ -1,5 +1,7 @@
 """Versioned, sample-only Apple Health receiver. No HealthKit/network side effects."""
 from datetime import datetime, timedelta, timezone
+import csv
+import io
 import hashlib
 import json
 import math
@@ -395,3 +397,31 @@ def restore_rows(db, rows, users):
             raise ValueError('Apple Healthバックアップの利用者・項目が不正です')
         if not insert(db, row['user_id'], normalize(row['sample']), instant(row['received_at'])):
             raise ValueError('バックアップ内でApple Healthサンプルが重複しています')
+
+
+CSV_FIELDS = ('user_id', 'sample_key', 'metric', 'start_at', 'end_at', 'value',
+              'unit', 'source', 'source_id', 'device', 'received_at')
+
+
+def export_csv(store, user_id):
+    """All stored samples for one user, without history limits or source selection."""
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError('利用者を指定してください')
+    output = io.StringIO(newline='')
+    output.write('\ufeff')
+    writer = csv.DictWriter(output, CSV_FIELDS)
+    writer.writeheader()
+    with store.connect() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise ValueError('登録済みの利用者を指定してください')
+        for key, payload, received in db.execute(
+                'SELECT sample_key, payload, received_at FROM apple_health_samples '
+                'WHERE user_id=? ORDER BY start_at, sample_key', (user_id,)):
+            row = json.loads(payload)
+            row.update(user_id=user_id, sample_key=key, received_at=received)
+            # Spreadsheet text must not be evaluated as a formula.
+            for field, value in row.items():
+                if isinstance(value, str) and value.lstrip().startswith(('=', '+', '-', '@')):
+                    row[field] = "'" + value
+            writer.writerow(row)
+    return output.getvalue()

@@ -35,6 +35,8 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  d.getElementById('user-form').elements.name.value='DOM Test';submit('user-form');
  await until(()=>d.getElementById('message').textContent==='利用者を追加しました');
  d.querySelector('[data-page="records"]').click();
+ await until(()=>!d.getElementById('ah-export').hidden);
+ assert.equal(d.getElementById('ah-export').getAttribute('href'),'/api/apple-health/export.csv?user_id='+encodeURIComponent(d.getElementById('current-user').value));
  const form=d.getElementById('record-form');
  form.elements.measured_at.value='2026-09-25T07:30:12';form.elements.systolic.value='130';form.elements.diastolic.value='80';form.elements.pulse.value='72';submit('record-form');
  await until(()=>d.getElementById('message').textContent.includes('1件保存'));
