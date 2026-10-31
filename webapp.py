@@ -160,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/devices":
             self._json(200, self.store.devices())
         elif path in ('/api/apple-health/debug', '/api/apple-health/debug/download'):
-            data = health_debug.for_server(self.server).snapshot()
+            data = health_debug.for_server(self.server).snapshot(full=path.endswith('/download'))
             if path.endswith('/download'):
                 self._send(200, json.dumps(data, ensure_ascii=False, indent=2).encode(),
                            'application/json; charset=utf-8', 'selfcare-shortcuts-debug.json')
@@ -228,6 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         size = integer(self.headers.get("Content-Length", "0"), "リクエストサイズ", 2, MAX_BODY)
         raw = self.rfile.read(size)
         if getattr(self, '_health_debug_session', None):
+            health_debug.for_server(self.server).capture(self._health_debug_session, self._health_debug_entry, raw)
             self._health_debug_size = len(raw)
             self._health_debug_preview = raw[:8192].decode('utf-8', errors='replace')
             self._health_debug_truncated = len(raw) > 8192
