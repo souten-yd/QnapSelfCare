@@ -38,13 +38,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.69 >/dev/null 2>&1; then
-            echo 'Release v0.3.69 already exists; leaving it unchanged.'
+          if gh release view v0.3.70 >/dev/null 2>&1; then
+            echo 'Release v0.3.70 already exists; leaving it unchanged.'
             exit 0
           fi
           sha256sum dist/*.qpkg > dist/SHA256SUMS
-          gh release create v0.3.69 dist/*.qpkg dist/SHA256SUMS \
-            --title 'QnapSelfCare 0.3.69' \
-            --notes 'Accept the Awake, In Bed and Asleep sleep labels from iPhone Shortcuts so a night that contains Awake is no longer rejected.' \
+          gh release create v0.3.70 dist/*.qpkg dist/SHA256SUMS \
+            --title 'QnapSelfCare 0.3.70' \
+            --notes 'Fix in-app updates that left the old server running: the service stop now recognizes a server started with the /share/Container alias when the updater passes the resolved volume path, and stop fails instead of reporting success while the port is still held.' \
             --target "$GITHUB_SHA"
 
