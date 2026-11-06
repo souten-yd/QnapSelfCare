@@ -112,7 +112,8 @@ UNIT_NAMES = {'歩': 'count', '拍/分': 'bpm', '拍／分': 'bpm',
               'パーセント': '%', 'キロカロリー': 'kcal'}
 SLEEP_NAMES = {'覚醒': 'awake', 'ベッドにいた時間': 'in_bed', '睡眠': 'asleep_unspecified',
                'コア': 'core', '深い': 'deep', 'レム': 'rem',
-               'REM': 'rem', 'Core': 'core', 'Deep': 'deep'}
+               'REM': 'rem', 'Core': 'core', 'Deep': 'deep', 'Awake': 'awake',
+               'In Bed': 'in_bed', 'Asleep': 'asleep_unspecified', 'Unspecified': 'asleep_unspecified'}
 
 
 def sample_text_record(text):

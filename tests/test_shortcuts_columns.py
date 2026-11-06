@@ -57,3 +57,10 @@ class ColumnTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ah.ingest(self.store,self.body(dict(row,value=['Deep','Unrecognized']),'sleep',''))
         self.assertEqual(ah.history(self.store,self.user)['total'],3)
+
+    def test_english_awake_and_in_bed_labels(self):
+        row = dict(self.row, value=['Awake', 'In Bed'])
+        self.assertEqual(ah.ingest(self.store, self.body(row, 'sleep', ''))['inserted'], 2)
+        values = sorted(r['value'] for r in ah.history(self.store, self.user)['samples'])
+        self.assertEqual(values, ['awake', 'in_bed'])
+        self.assertEqual(ah.ingest(self.store, self.body(dict(row, value=['覚醒', 'ベッドにいた時間']), 'sleep', ''))['duplicates'], 2)
