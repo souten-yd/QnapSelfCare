@@ -119,6 +119,59 @@ class ServiceTests(unittest.TestCase):
                 old.terminate()
                 old.wait(timeout=5)
 
+    def test_pid_reconciliation_accepts_alias_argv_with_resolved_caller(self):
+        """QTS starts the server with /share/Container; the Web updater stops it with the resolved path."""
+        import importlib.util
+        import time
+        spec = importlib.util.spec_from_file_location("selfcare_pid", SERVICE / "selfcare_pid.py")
+        pid_helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pid_helper)
+        with tempfile.TemporaryDirectory() as directory:
+            top = Path(directory)
+            root = top / "QnapSelfCare"
+            root.mkdir()
+            (root / "webapp.py").write_text("import time\ntime.sleep(30)\n")
+            volume = top / "actual-volume"
+            volume.mkdir()
+            (top / "Container").symlink_to(volume, target_is_directory=True)
+            alias = top / "Container" / "QnapSelfCare"
+            real = volume / "QnapSelfCare"
+            real.mkdir()
+            other = volume / "Other"
+            other.mkdir()
+            old = subprocess.Popen(
+                [sys.executable, str(root / "webapp.py"), "--lan",
+                 "--port", "17863", "--data-dir", str(alias)],
+                cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                time.sleep(0.1)
+                self.assertIsNotNone(pid_helper.owned(old.pid, root, real))
+                self.assertIsNone(pid_helper.owned(old.pid, root, other))
+            finally:
+                old.terminate()
+                old.wait(timeout=5)
+
+    def test_stop_fails_when_port_stays_held(self):
+        import socket
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "QnapSelfCare"
+            root.mkdir()
+            for file in ("selfcare.sh", "selfcare_pid.py", "python3-path"):
+                shutil.copy(SERVICE / file, root / file)
+            env = dict(os.environ, SELFCARE_PYTHON=sys.executable,
+                       SELFCARE_DATA_DIR=str(Path(directory) / "data"))
+            with socket.socket() as holder:
+                holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    holder.bind(("0.0.0.0", 17863))
+                except OSError:
+                    self.skipTest("port 17863 is in use on this machine")
+                holder.listen()
+                result = subprocess.run(["sh", str(root / "selfcare.sh"), "stop"],
+                                        env=env, capture_output=True, text=True, timeout=12)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("still held", result.stderr)
+
     def test_stale_pid_file_does_not_kill_foreign_process(self):
         with tempfile.TemporaryDirectory() as directory:
             top = Path(directory)

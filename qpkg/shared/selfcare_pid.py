@@ -27,6 +27,9 @@ def owned(pid, root, data):
         # QTS may launch the old service with /share/Container or its
         # /share/CACHEDEV*_DATA/Container resolved volume path. Both must
         # identify the same canonical directory; never accept arbitrary paths.
+        # The Web updater passes the resolved volume path while QTS may have
+        # started the server with the /share/Container alias, so compare the
+        # canonical directory on both sides as well.
         exact_data_paths = {str(data), os.path.realpath(data)}
         if not args or len(args) not in (7, 8):
             return None
@@ -34,7 +37,8 @@ def owned(pid, root, data):
             return None
         command = args[2:] if len(args) == 8 and args[1] == "-B" else args[1:]
         if (len(command) != 6 or command[:5] != expected_prefix or
-                command[5] not in exact_data_paths):
+                (command[5] not in exact_data_paths and
+                 os.path.realpath(command[5]) != os.path.realpath(data))):
             return None
         if not PYTHON.fullmatch(Path(os.readlink(base / "exe")).name):
             return None
@@ -125,6 +129,12 @@ def main(args):
         print("Stale PID file cleanup failed:", error, file=sys.stderr)
         return 1
     if action == "stop":
+        # Report a server we could not identify instead of claiming success:
+        # the Web updater must abort before replacing files in that case.
+        if not port_free():
+            print("Port 17863 is still held after stop; no verified QnapSelfCare server was found",
+                  file=sys.stderr)
+            return 1
         return 0
     if not port_free():
         print("Port 17863 held by unrelated process; refusing takeover", file=sys.stderr)
