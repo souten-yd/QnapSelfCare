@@ -1,0 +1,29 @@
+name: Publish prebuilt v0.3.70
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-prebuilt-0.3.70.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify prebuilt packages
+        working-directory: release-artifacts/v0.3.70
+        run: sha256sum --check SHA256SUMS
+      - name: Publish locally built release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.70 >/dev/null 2>&1; then
+            echo 'Release v0.3.70 already exists; refusing to overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.70 release-artifacts/v0.3.70/*.qpkg release-artifacts/v0.3.70/SHA256SUMS \
+            --target d043bd2f4c6953a02995fee7c588fec7cc716d30 \
+            --title 'QnapSelfCare 0.3.70' \
+            --notes 'Fix in-app updates that left the old server running on port 17863. Updates from 0.3.69 or older still use the old stop helper: restart QnapSelfCare once in App Center (stop, then start) or install this QPKG manually. QPKGs built locally with QDK 2.5.3; this workflow only verifies checksums and uploads prebuilt files.'
