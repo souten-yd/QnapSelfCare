@@ -57,6 +57,35 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(other.error)
         self.assertEqual(other.records()["total"], 1)
 
+    def test_slow_startup_check_blocks_without_guard_and_recovers(self):
+        """A check that runs out of time at boot is not corruption: no guard file, automatic retry."""
+        from unittest.mock import patch
+        import durability
+        import storage
+        with self.store.connect() as db:
+            db.executemany("INSERT INTO users VALUES(?,?)", [(f"u{i}", "x" * 200) for i in range(3000)])
+        with self.assertRaises(TimeoutError):
+            durability.check_database(self.store.path, timeout=0)
+        with patch.object(storage, "STARTUP_CHECK_SECONDS", 0):
+            slow = Store(self.tmp.name)
+        self.assertIn("秒以内に終了しませんでした", slow.error)
+        self.assertTrue(slow.recoverable)
+        self.assertFalse(slow.guard.exists())
+        with self.assertRaises(Exception):
+            slow.save_user({"name": "Blocked"})
+        self.assertTrue(slow.retry_unavailable(timeout=30))
+        self.assertIsNone(slow.error)
+        self.assertEqual(slow.save_user({"name": "After"})["name"], "After")
+
+    def test_corruption_is_never_retried_automatically(self):
+        self.store.protect("測定DBの破損を検出しました")
+        self.assertFalse(self.store.recoverable)
+        self.assertFalse(self.store.retry_unavailable())
+        self.assertTrue(self.store.guard.exists())
+        restarted = Store(self.tmp.name)
+        self.assertFalse(restarted.recoverable)
+        self.assertFalse(restarted.retry_unavailable())
+
     def test_database_marker_is_not_rewritten_on_restart(self):
         marker = Path(self.tmp.name) / 'database.initialized.json'
         self.assertTrue(marker.is_file())

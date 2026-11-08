@@ -75,6 +75,11 @@ def timestamp(value):
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
+
+# A cold NAS disk can need well over 10 s for quick_check of a large DB at boot.
+STARTUP_CHECK_SECONDS = 60
+RETRY_CHECK_SECONDS = 120
+
 class Store:
     def __init__(self, directory, state_directory=None):
         self.directory = Path(directory)
@@ -89,29 +94,65 @@ class Store:
         self.guard = state_directory / 'database.guard.json'
         self.marker = state_directory / 'database.initialized.json'
         self.pending_restore = state_directory / 'restore.pending.json'
+        self.state_directory = state_directory
+        # True only while writes are blocked by a temporary condition (slow startup
+        # check, unmounted volume, busy disk). Corruption and guard files never set it.
+        self.recoverable = False
+        self._open(STARTUP_CHECK_SECONDS)
+
+    def _open(self, timeout):
         self._initializing = True
         try:
             if self.pending_restore.exists() or self.guard.exists():
                 raise CorruptDatabase('保護モードです。診断を確認し、停止中に検証済みバックアップから復旧してください')
             if self.path.exists():
-                check_database(self.path)
-            elif self.marker.exists() or any((state_directory / 'backups').glob('selfcare-*.zip')):
+                check_database(self.path, timeout=timeout)
+            elif self.marker.exists() or any((self.state_directory / 'backups').glob('selfcare-*.zip')):
                 raise CorruptDatabase('以前の測定DBが見つかりません。空のDBは作成しません')
             self._initialize()
             # Initial database marker is durable, but rewriting the same marker
             # at every QPKG restart is unnecessary RAID1 journal traffic.
             if not self.marker.exists():
                 write_json(self.marker, {'schema': 1})
+            self.error, self.recoverable = None, False
         except (CorruptDatabase, DataUnavailable, sqlite3.DatabaseError, OSError) as error:
             self.error = str(error)
             if isinstance(error, CorruptDatabase) or corruption(error):
+                self.recoverable = False
                 self.protect(self.error)
+            else:
+                self.recoverable = True
         finally:
             self._initializing = False
+
+    def retry_unavailable(self, timeout=RETRY_CHECK_SECONDS):
+        """Re-run the startup checks after a temporary failure; never after corruption."""
+        if not self.error or not self.recoverable:
+            return False
+        # The slow pass runs without the lock, so requests keep failing fast instead of hanging;
+        # it also warms the disk cache for the short re-check below.
+        if self.path.exists():
+            try:
+                check_database(self.path, timeout=timeout)
+            except CorruptDatabase as error:
+                self.protect(str(error))
+                return False
+            except (DataUnavailable, sqlite3.DatabaseError, OSError) as error:
+                with self.lock:
+                    if self.recoverable:
+                        self.error = str(error)
+                return False
+        with self.lock:
+            if not self.error or not self.recoverable:
+                return self.error is None
+            self.error = None   # connect() inside _open() needs the gate open; _open() re-sets it on failure
+            self._open(timeout)
+            return self.error is None
 
     def protect(self, message):
         with self.lock:
             self.error = message
+            self.recoverable = False
             try:
                 write_json(self.guard, {'message': message, 'detected_at': now()})
             except OSError:

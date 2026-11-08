@@ -196,7 +196,8 @@ class ProtectionManager:
                     'error': self.state.get('error'), 'warning': self.state.get('warning'),
                     'verification': self.state.get('verification'),
                     'directory': str(self.directory), 'backups': backups,
-                    'recovery_required': bool(self.store.error), 'database_error': self.store.error}
+                    'recovery_required': bool(self.store.error), 'database_error': self.store.error,
+                    'database_recoverable': bool(self.store.error) and self.store.recoverable}
 
     def request_backup(self):
         self.store.require_available()
@@ -246,6 +247,11 @@ class ProtectionManager:
 
     def loop(self):
         while not self.stop.is_set():
+            if self.store.error and self.store.recoverable:
+                try:
+                    self.store.retry_unavailable()
+                except Exception:
+                    pass  # Stay blocked; the next pass retries.
             with self.lock:
                 reason, self.requested = self.requested, None
             status = self.status()
@@ -379,6 +385,8 @@ class ProtectionManager:
         checks = []
         def add(key, label, level, message):
             checks.append(dict(id=key, label=label, level=level, message=message))
+        if self.store.error and self.store.recoverable:
+            self.store.retry_unavailable()
         try:
             counts = check_database(self.store.path, full=True)
             if self.store.error:
