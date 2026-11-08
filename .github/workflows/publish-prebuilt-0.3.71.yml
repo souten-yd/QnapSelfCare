@@ -1,0 +1,29 @@
+name: Publish prebuilt v0.3.71
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-prebuilt-0.3.71.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify prebuilt packages
+        working-directory: release-artifacts/v0.3.71
+        run: sha256sum --check SHA256SUMS
+      - name: Publish locally built release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.71 >/dev/null 2>&1; then
+            echo 'Release v0.3.71 already exists; refusing to overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.71 release-artifacts/v0.3.71/*.qpkg release-artifacts/v0.3.71/SHA256SUMS \
+            --target 1c7e9ae8b369689d5ffaa3aae9828f09161ece3b \
+            --title 'QnapSelfCare 0.3.71' \
+            --notes 'A slow database check at NAS startup no longer leaves SelfCare stuck with the message interrupted: the check waits up to 60 seconds and SelfCare re-checks automatically every 30 seconds, resuming once it passes. Corruption still requires manual recovery. QPKGs built locally with QDK 2.5.3; this workflow only verifies checksums and uploads prebuilt files.'
