@@ -29,7 +29,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.70"
+VERSION = "0.3.71"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -128,6 +128,7 @@ class Handler(BaseHTTPRequestHandler):
                              "record_count": None if self.store.error else self.store.records(limit=0)["total"],
                              "recovery_required": bool(self.store.error),
                              "database_error": self.store.error,
+                             "database_recoverable": bool(self.store.error) and self.store.recoverable,
                              "collection_enabled": False if self.store.error else any(d["auto_sync"] for d in self.store.devices()),
                              "data_path": str(self.store.path)})
         elif path == "/api/users":

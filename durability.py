@@ -111,6 +111,9 @@ def check_database(path, full=False, timeout=10):
     except sqlite3.DatabaseError as error:
         if corruption(error):
             raise CorruptDatabase('測定DBの破損を検出しました') from error
+        if 'interrupted' in str(error).lower():
+            # Our own progress-handler deadline, not damage: report it as a timeout.
+            raise TimeoutError(f'DB検査が{timeout}秒以内に終了しませんでした（NASの負荷・ディスク起動待ち）。自動で再確認します') from None
         raise
 
 

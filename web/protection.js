@@ -44,7 +44,8 @@
     byId('protection-status').replaceChildren();
     for (const [label, value] of Object.entries(rows)) byId('protection-status').append(node('dt', label), node('dd', value));
     const alert = byId('data-alert');
-    alert.textContent = data.recovery_required ? 'データを保護しています。保存・新規Bluetooth収集は停止しています。設定・バックアップの診断と復旧手順を確認してください。' :
+    alert.textContent = data.recovery_required && data.database_recoverable ? `データベースの起動時確認が完了していないため、保存を一時停止しています。約30秒ごとに自動で再確認し、確認できしだい再開します（${data.database_error}）。` :
+      data.recovery_required ? 'データを保護しています。保存・新規Bluetooth収集は停止しています。設定・バックアップの診断と復旧手順を確認してください。' :
       data.config_error || data.error || (data.verification && !data.verification.ok ? '保存済みバックアップの再検査に失敗しました。設定・バックアップを確認してください。' : '') || (!data.settings.enabled ? '定期バックアップは無効です。設定・バックアップから有効にできます。' : '');
     alert.hidden = !alert.textContent;
     byId('backup-list').replaceChildren();

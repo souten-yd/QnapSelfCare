@@ -46,6 +46,13 @@ async function until(check) {
     state = {...state, busy: false, phase: 'idle', recovery_required: true, database_error: 'corrupt'};
     await poll();
     await until(() => !d.getElementById('data-alert').hidden);
+    assert.match(d.getElementById('data-alert').textContent, /復旧手順/);
+    state = {...state, database_recoverable: true, database_error: 'DB検査が60秒以内に終了しませんでした'};
+    await poll();
+    await until(() => d.getElementById('data-alert').textContent.includes('自動で再確認'));
+    state = {...state, database_recoverable: false, database_error: 'corrupt'};
+    await poll();
+    await until(() => d.getElementById('data-alert').textContent.includes('復旧手順'));
     assert.equal(d.getElementById('backup-now').disabled, true);
     assert.equal(d.getElementById('verify-backup').disabled, false, 'verification remains available in recovery mode');
     assert.ok(d.querySelector('#backup-list a'), 'download remains available in recovery mode');
