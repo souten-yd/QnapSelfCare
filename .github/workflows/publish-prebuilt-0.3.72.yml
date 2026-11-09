@@ -1,0 +1,29 @@
+name: Publish prebuilt v0.3.72
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-prebuilt-0.3.72.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify prebuilt packages
+        working-directory: release-artifacts/v0.3.72
+        run: sha256sum --check SHA256SUMS
+      - name: Publish locally built release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.72 >/dev/null 2>&1; then
+            echo 'Release v0.3.72 already exists; refusing to overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.72 release-artifacts/v0.3.72/*.qpkg release-artifacts/v0.3.72/SHA256SUMS \
+            --target e2eafb92b2e8ec1e9c698637c31c10811f4d53d5 \
+            --title 'QnapSelfCare 0.3.72' \
+            --notes 'Faster Home screen: gzip-compressed responses, watch data aggregated per day on the server, trend charts limited to the selected period (last 90 days by default) in a compact form, and Home no longer waits for the evaluations. Transferred data in a two-year test dataset fell from about 5.6 MB to about 50 KB. QPKGs built locally with QDK 2.5.3; this workflow only verifies checksums and uploads prebuilt files.'
