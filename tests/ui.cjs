@@ -27,6 +27,7 @@ async function until(check,tries=100){for(let i=0;i<tries;i++){if(await check())
  const w=dom.window,d=w.document;
  const appSource=fs.readFileSync('web/app.js','utf8');
  assert.equal(appSource.includes("$('jobs').replaceChildren()"),false);
+ w.localStorage.setItem('qnap-selfcare-overview-period-v1',JSON.stringify({since:'',until:''})); // fixed-date records: show all periods
  w.TextDecoder=TextDecoder;
  w.fetch=(url,init)=>fetch(base+url,init);w.setInterval=()=>0;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
  w.eval(fs.readFileSync('web/chart-cursor.js','utf8')+'\n'+fs.readFileSync('web/app.js','utf8')+'\n'+fs.readFileSync('web/wellness.js','utf8')+'\nwindow.__testRefreshJobs=refreshJobs;window.__testMark=markMeasuredToday;window.__testRestorePeriod=restorePeriodFilter;window.__testRefreshProposals=refreshProposals;window.__testRefreshAiActivity=refreshAiActivity;window.__testAiProgressText=aiProgressText;');

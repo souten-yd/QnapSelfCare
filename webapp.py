@@ -3,6 +3,7 @@ import apple_health
 import health_debug
 import health_metrics
 import argparse
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -29,7 +30,7 @@ from ai_jobs import AIJobs
 import daily_advice
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.3.71"
+VERSION = "0.3.72"
 PORT = 17863
 BLUETOOTH_SYSFS = Path("/sys/class/bluetooth")
 MAX_BODY = 32 * 1024 * 1024
@@ -45,6 +46,23 @@ def bluetooth_adapters(root=BLUETOOTH_SYSFS):
     except OSError:
         return []
 
+
+
+GZIP_MIN_BYTES = 1024
+COMPRESSIBLE = {'application/json', 'text/html', 'text/css', 'text/javascript', 'text/csv', 'image/svg+xml'}
+_STATIC_CACHE = {}
+
+
+def static_asset(path):
+    """Page assets with their gzip form, rebuilt only when the file changes."""
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    cached = _STATIC_CACHE.get(str(path))
+    if not cached or cached[0] != key:
+        body = path.read_bytes()
+        cached = (key, body, gzip.compress(body, compresslevel=9, mtime=0))
+        _STATIC_CACHE[str(path)] = cached
+    return cached[1], cached[2]
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "QnapSelfCare"
@@ -66,10 +84,14 @@ class Handler(BaseHTTPRequestHandler):
     def store(self):
         return self.server.store
 
-    def _headers(self, status, size, mime, filename=None):
+    def _headers(self, status, size, mime, filename=None, encoding=None):
         self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(size))
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        if mime.split(';')[0] in COMPRESSIBLE:
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
@@ -79,8 +101,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
 
-    def _send(self, status, body, mime="application/json; charset=utf-8", filename=None):
-        self._headers(status, len(body), mime, filename)
+    def _accepts_gzip(self):
+        return any(part.split(';')[0].strip().lower() == 'gzip'
+                   for part in self.headers.get('Accept-Encoding', '').split(','))
+
+    def _send(self, status, body, mime="application/json; charset=utf-8", filename=None, compressed=None):
+        # JSON and page assets shrink 5-10x; this matters most over Wi-Fi/VPN from a phone.
+        encoding = None
+        if (not filename and len(body) >= GZIP_MIN_BYTES and mime.split(';')[0] in COMPRESSIBLE
+                and self._accepts_gzip()):
+            body, encoding = compressed if compressed is not None else gzip.compress(body, compresslevel=5, mtime=0), 'gzip'
+        self._headers(status, len(body), mime, filename, encoding)
         self.wfile.write(body)
 
     def _json(self, status, value):
@@ -121,7 +152,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png")}
         if path in static:
             name, mime = static[path]
-            self._send(200, (ROOT / "web" / name).read_bytes(), mime)
+            body, packed = static_asset(ROOT / "web" / name)
+            self._send(200, body, mime, compressed=packed)
         elif path == "/api/status":
             self._json(200, {"version": VERSION, "architecture": architecture(),
                              "bluetooth_adapters": bluetooth_adapters(),
@@ -172,12 +204,22 @@ class Handler(BaseHTTPRequestHandler):
                        "text/csv; charset=utf-8", "selfcare-apple-health-all.csv")
         elif path == "/api/apple-health/status":
             self._json(200, apple_health.receive_status(self.store, query.get('user_id', [''])[0]))
+        elif path == "/api/apple-health/daily":
+            self._json(200, apple_health.daily(self.store, query.get('user_id', [''])[0],
+                since=query.get('since', [None])[0], until=query.get('until', [None])[0],
+                offset_minutes=integer(query.get('tz_offset', ['0'])[0], '時差', -840, 840),
+                metrics=query.get('metric', [None])[0]))
         elif path == "/api/apple-health/samples":
             self._json(200, apple_health.history(self.store, query.get('user_id', [''])[0],
                 since=query.get('since', [None])[0], until=query.get('until', [None])[0],
                 limit=integer(query.get('limit', ['200'])[0], '件数', 1, 1000),
                 offset=integer(query.get('offset', ['0'])[0], '開始位置', 0, 10000000),
                 metrics=query.get('metric', [None])[0]))
+        elif path == "/api/records/latest":
+            self._json(200, self.store.latest_records(query.get("user_id", [None])[0]))
+        elif path == "/api/records/chart":
+            self._json(200, self.store.chart_records(**self._filters(query),
+                limit=integer(query.get("limit", ["2000"])[0], "件数", 1, 5000)))
         elif path == "/api/records":
             self._json(200, self.store.records(**self._filters(query),
                 limit=integer(query.get("limit", ["200"])[0], "件数", 1, 2000),

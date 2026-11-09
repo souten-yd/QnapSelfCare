@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS apple_health_samples(
     PRIMARY KEY(user_id, sample_key));
 CREATE INDEX IF NOT EXISTS apple_health_history
     ON apple_health_samples(user_id, start_at, sample_key);
+CREATE INDEX IF NOT EXISTS apple_health_metric_time
+    ON apple_health_samples(user_id, metric, start_at);
 '''
 
 
@@ -357,6 +359,43 @@ def history(store, user_id, since=None, until=None, limit=200, offset=0, metrics
         rows = db.execute('SELECT payload,received_at FROM apple_health_samples WHERE ' + where +
                           ' ORDER BY start_at,sample_key LIMIT ? OFFSET ?', args + [limit, offset]).fetchall()
     return {'total': total, 'samples': [dict(json.loads(r[0]), received_at=r[1]) for r in rows]}
+
+
+NUMERIC_METRICS = [m for m in METRICS if m != 'sleep']
+
+
+def daily(store, user_id, since, until, offset_minutes=0, metrics=None):
+    """Per local day, metric and source: count, sum, min, max of numeric samples.
+
+    The Home dashboard needs only these figures, so a week of minute-level heart rate
+    (thousands of rows) becomes a few dozen rows. Days follow the caller's UTC offset
+    and each sample counts on the day it starts, as on the dashboard."""
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError('user_idが必要です')
+    if not since or not until:
+        raise ValueError('sinceとuntilが必要です')
+    start, end = instant(since), instant(until)
+    if start >= end or datetime.fromisoformat(end) - datetime.fromisoformat(start) > timedelta(days=400):
+        raise ValueError('期間が不正です（最大400日）')
+    wanted = [m for m in (metrics or ','.join(NUMERIC_METRICS)).split(',') if m]
+    if not wanted or len(wanted) > 10 or any(m not in NUMERIC_METRICS for m in wanted):
+        raise ValueError('metricが不正です')
+    if not isinstance(offset_minutes, int) or not -840 <= offset_minutes <= 840:
+        raise ValueError('時差が不正です')
+    shift = f'{offset_minutes:+d} minutes'
+    with store.connect() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise ValueError('利用者が見つかりません')
+        rows = db.execute(
+            "SELECT date(substr(start_at,1,19), ?) AS day, metric, json_extract(payload,'$.source') AS source,"
+            " COUNT(*), SUM(json_extract(payload,'$.value')), MIN(json_extract(payload,'$.value')),"
+            " MAX(json_extract(payload,'$.value'))"
+            ' FROM apple_health_samples WHERE user_id=? AND start_at>=? AND start_at<?'
+            ' AND metric IN (' + ','.join('?' * len(wanted)) + ')'
+            ' GROUP BY day, metric, source ORDER BY day, metric, source',
+            [shift, user_id, start, end] + wanted).fetchall()
+    return {'fields': ['day', 'metric', 'source', 'n', 'sum', 'min', 'max'],
+            'rows': [[r[0], r[1], r[2] or 'unknown', r[3], r[4], r[5], r[6]] for r in rows]}
 
 
 def receive_status(store, user_id, days=7, now=None):

@@ -632,6 +632,38 @@ class Store:
         record.pop("fingerprint", None)
         return record
 
+    def latest_records(self, user_id=None):
+        """Newest record of each kind (for the summary cards), independent of the chart period."""
+        where, params = ("WHERE user_id=?", [user_id]) if user_id else ("", [])
+        with self.connect() as db:
+            kinds = [r[0] for r in db.execute("SELECT DISTINCT kind FROM measurements " + where, params)]
+            result = {}
+            for kind in kinds:
+                row = db.execute("SELECT * FROM measurements " + (where + " AND" if where else "WHERE") +
+                                 " kind=? ORDER BY measured_at DESC,id DESC LIMIT 1", params + [kind]).fetchone()
+                if row:
+                    result[kind] = self.unpack(row)
+            return result
+
+    def chart_records(self, user_id=None, kind=None, since=None, until=None, limit=2000):
+        """Only what the trend charts draw: [measured_at, user_id, kind, values] rows, newest first."""
+        terms, params = [], []
+        for field, value in (("user_id", user_id), ("kind", kind)):
+            if value:
+                terms.append(f"{field}=?")
+                params.append(value)
+        for op, value in ((">=", since), ("<=", until)):
+            if value:
+                terms.append(f"measured_at {op} ?")
+                params.append(timestamp(value))
+        where = " WHERE " + " AND ".join(terms) if terms else ""
+        with self.connect() as db:
+            count = db.execute("SELECT COUNT(*) FROM measurements" + where, params).fetchone()[0]
+            rows = db.execute("SELECT measured_at,user_id,kind,values_json FROM measurements" + where +
+                              " ORDER BY measured_at DESC,id DESC LIMIT ?", params + [limit]).fetchall()
+        return {"total": count, "fields": ["measured_at", "user_id", "kind", "values"],
+                "rows": [[r[0], r[1], r[2], json.loads(r[3])] for r in rows]}
+
     def records(self, user_id=None, kind=None, since=None, until=None, limit=200, offset=0):
         terms, params = [], []
         for field, value in (("user_id", user_id), ("kind", kind)):
