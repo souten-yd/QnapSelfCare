@@ -431,8 +431,11 @@ def compute(store, user_id, current=None):
     with store.connect() as db:
         records = [store.unpack(r) for r in db.execute(
             'SELECT * FROM measurements WHERE user_id=? AND measured_at>=? ORDER BY measured_at', (user_id, utc(since)))]
-        samples = [json.loads(r[0]) for r in db.execute(
-            'SELECT payload FROM apple_health_samples WHERE user_id=? AND end_at>=? ORDER BY start_at',
+        # Only the fields used below, extracted by SQLite: decoding every JSON payload in Python
+        # (tens of thousands of heart-rate rows) dominated this request on the NAS CPU.
+        samples = [{'metric': r[0], 'start_at': r[1], 'end_at': r[2], 'value': r[3], 'source': r[4]} for r in db.execute(
+            "SELECT metric, start_at, end_at, json_extract(payload,'$.value'), json_extract(payload,'$.source')"
+            ' FROM apple_health_samples WHERE user_id=? AND end_at>=? ORDER BY start_at',
             (user_id, utc(since + timedelta(days=32))))]
     report = store.energy_report(user_id)
     plan = report.get('active_plan')

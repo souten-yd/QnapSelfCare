@@ -46,6 +46,25 @@
     const times = asleep.map(clip);
     return {total: union(times), stages, start: Math.min(...times.map(t => t[0])), end: Math.max(...times.map(t => t[1]))};
   }
+  // Server-side daily aggregates ([day, metric, source, n, sum, min, max]) -> the same per-day shape as
+  // dailyTotals, with heart/oxygen as {min, max, avg, n}. Each metric keeps its busiest source.
+  function aggregateTotals(rows, days) {
+    const out = Object.fromEntries(days.map(d => [d, {steps: null, distance: null, active_energy: null, heart: null, oxygen: null}]));
+    const counts = new Map(), sources = new Map();
+    for (const [, metric, source, n] of rows) { const k = metric+'\u0000'+source; counts.set(k, (counts.get(k) || 0)+n); sources.set(source, (sources.get(source) || 0)+n); }
+    const best = new Map();
+    for (const [k, n] of counts) { const [metric, source] = k.split('\u0000'); if (!best.has(metric) || n > best.get(metric)[1]) best.set(metric, [source, n]); }
+    for (const [day, metric, source, n, sum, min, max] of rows) {
+      const slot = out[day]; if (!slot || best.get(metric)?.[0] !== source) continue;
+      if (metric === 'steps') slot.steps = sum;
+      else if (metric === 'walking_running_distance') slot.distance = sum/1000;
+      else if (metric === 'active_energy') slot.active_energy = sum;
+      else if (metric === 'heart_rate') slot.heart = {min, max, avg: sum/n, n};
+      else if (metric === 'oxygen_saturation') slot.oxygen = {min, max, avg: sum/n, n};
+    }
+    let source = null, top = 0; for (const [s, n] of sources) if (n > top) { source = s; top = n; }
+    return {totals: out, source};
+  }
   // Daily lowest / highest / average of a vital (heart rate, blood oxygen); null without samples.
   function vitalRange(values) {
     const v = (values || []).filter(Number.isFinite); if (!v.length) return null;
@@ -91,7 +110,7 @@
     return out.join('') || '記録がそろうと、ここに今日のまとめを表示します。';
   }
   function stepGoalOf(profile) { const v = Number(profile?.step_goal); return Number.isInteger(v) && v >= 1000 && v <= 50000 ? v : DEFAULT_STEP_GOAL; }
-  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, vitalRange, union, mainSource, perMetricMainSource, dailyTotals, latestDay, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
+  if (typeof module !== 'undefined' && module.exports) { module.exports = {dayKey, lastDays, vitalRange, aggregateTotals, union, mainSource, perMetricMainSource, dailyTotals, latestDay, sleepFor, dietProgress, energyBalance, summaryText, adviceHighlights, stepGoalOf, DEFAULT_STEP_GOAL}; return; }
   let STEP_GOAL = DEFAULT_STEP_GOAL;
 
   // ---- Rendering ----
@@ -266,14 +285,13 @@
 
   function renderHeart(today, dayLabel) {
     const target = $('home-heart');
-    const hr = today?.heart || [], ox = today?.oxygen || [];
-    if (!hr.length && !ox.length) { empty(target, '直近7日の心拍・血中酸素の記録はありません。'); return; }
+    const hr = today?.heart, ox = today?.oxygen;
+    if (!hr && !ox) { empty(target, '直近7日の心拍・血中酸素の記録はありません。'); return; }
     target.replaceChildren();
     if (dayLabel) target.append(el('p', `今日の記録はまだありません。最新の記録（${dayLabel}）を表示しています。`, 'home-note'));
-    const avg = list => list.reduce((a, b) => a+b, 0)/list.length;
     const grid = el('div', undefined, 'home-stats home-stats-tight');
-    grid.append(stat('平均心拍', hr.length ? num(avg(hr)) : '—', hr.length ? 'bpm' : '', hr.length ? `${num(Math.min(...hr))}〜${num(Math.max(...hr))} bpm` : ''),
-      stat('血中酸素', ox.length ? num(avg(ox)) : '—', ox.length ? '%' : '', ox.length ? `${ox.length}件の平均` : ''));
+    grid.append(stat('平均心拍', hr ? num(hr.avg) : '—', hr ? 'bpm' : '', hr ? `${num(hr.min)}〜${num(hr.max)} bpm` : ''),
+      stat('血中酸素', ox ? num(ox.avg) : '—', ox ? '%' : '', ox ? `${ox.n}件の平均` : ''));
     target.append(grid, el('p', '記録値の単純平均です。', 'home-foot'));
   }
 
@@ -395,6 +413,15 @@
   }
 
   let serial = 0;
+  // Through app.js api() when present, so a request the other tabs already started is shared; null on failure.
+  const getJson = url => (typeof api === 'function' ? api(url) : fetch(url, {cache: 'no-store'}).then(r => r.ok ? r.json() : null)).catch(() => null);
+  async function fetchDaily(user, since, until) {
+    const p = new URLSearchParams({user_id: user, since: new Date(since).toISOString(), until: new Date(until).toISOString(),
+      tz_offset: String(-new Date(since).getTimezoneOffset())});
+    const response = await fetch('/api/apple-health/daily?'+p, {cache: 'no-store'}); const data = await response.json();
+    if (!response.ok) throw Error(data.error || 'ヘルスケアの記録を取得できません');
+    return data.rows;
+  }
   async function fetchSamples(user, since, until, metric) {
     const all = []; let total = 0;
     do {
@@ -418,26 +445,26 @@
     for (const id of ['home-diet', 'home-activity', 'home-sleep', 'home-heart', 'home-energy', 'home-steps-week', 'home-sleep-week', 'home-balance-week', 'home-heart-week', 'home-oxygen-week', 'home-eval-diet', 'home-eval-health']) if (!userId) empty($(id), '利用者を選択してください。');
     if (!userId) { renderAdviceCard(null); $('home-proposal-notice').hidden = true; renderSummary([], '利用者を選択すると、今日のまとめを表示します。'); $('home-source').textContent = ''; $('home-steps-avg').textContent = ''; $('home-sleep-avg').textContent = ''; $('home-balance-avg').textContent = ''; $('home-heart-avg').textContent = ''; $('home-oxygen-avg').textContent = ''; return; }
     const todayKey = dayKey(now), days = lastDays(todayKey, 7);
-    let rows = [], error = null, metrics = null;
-    const metricsRequest = fetch('/api/wellness/metrics?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
+    let rows = [], error = null, metrics = null, aggregated = aggregateTotals([], days);
+    const metricsRequest = getJson('/api/wellness/metrics?user_id='+encodeURIComponent(userId));
     // Fetch per metric group so frequent watch samples (heart rate) can never crowd out last night's sleep.
     try {
       const end = dayStart(todayKey)+DAY;
-      const groups = await Promise.all([
-        fetchSamples(userId, dayStart(days[0]), end, 'steps,walking_running_distance,active_energy'),
-        fetchSamples(userId, dayStart(days[0])-6*3600000, end, 'sleep'),
-        fetchSamples(userId, dayStart(days[0]), end, 'heart_rate,oxygen_saturation')]);
-      rows = groups.flat();
+      // Activity and vitals come pre-aggregated per day (a few dozen rows instead of thousands);
+      // only the sleep intervals are needed sample by sample.
+      const [daily, sleep] = await Promise.all([
+        fetchDaily(userId, dayStart(days[0]), end),
+        fetchSamples(userId, dayStart(days[0])-6*3600000, end, 'sleep')]);
+      aggregated = aggregateTotals(daily, days); rows = sleep;
     } catch (e) { error = e; }
-    metrics = await metricsRequest;
-    fetch('/api/wellness/advice?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
+    getJson('/api/wellness/advice?user_id='+encodeURIComponent(userId))
       .then(data => { if (ticket === serial) renderAdviceCard(data?.latest || null); }).catch(() => renderAdviceCard(null));
-    fetch('/api/wellness/plan-proposals?user_id='+encodeURIComponent(userId), {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
+    getJson('/api/wellness/plan-proposals?user_id='+encodeURIComponent(userId))
       .then(data => { if (ticket === serial) $('home-proposal-notice').hidden = !data?.pending; }).catch(() => { $('home-proposal-notice').hidden = true; });
     if (ticket !== serial) return;
-    const source = mainSource(rows.filter(r => r.metric !== 'sleep'));
+    const source = aggregated.source;
     const sleepSource = mainSource(rows.filter(r => r.metric === 'sleep'));
-    const totals = dailyTotals(perMetricMainSource(rows.filter(r => r.metric !== 'sleep')), days);
+    const totals = aggregated.totals;
     const nights = Object.fromEntries(days.map(d => [d, sleepFor(rows.filter(r => r.source === sleepSource), d)]));
     const energy = typeof energyData !== 'undefined' && wellnessProfileUser === userId ? energyData : null;
     const summary = typeof wellnessSummaryData !== 'undefined' && wellnessProfileUser === userId ? wellnessSummaryData : null;
@@ -447,15 +474,13 @@
     const todayEntry = energy ? (energy.entries || energy.diaries || []).find(x => x.date === energy.today) : null;
     $('home-source').textContent = error ? error.message : source ? `記録元：${source === 'unknown' ? '不明' : source}` : '';
     const diet = renderDiet(energy, summary);
-    if (metrics) { renderEvaluations($('home-eval-diet'), metrics.diet); renderEvaluations($('home-eval-health'), metrics.health); }
-    else for (const id of ['home-eval-diet', 'home-eval-health']) empty($(id), '評価を取得できませんでした。');
     renderActivity(totals[todayKey], todayEntry);
     const sleptDays = days.filter(d => nights[d]);
     const sleepAvg = sleptDays.length ? sleptDays.reduce((a, d) => a+nights[d].total, 0)/sleptDays.length : null;
     const md = key => `${Number(key.slice(5, 7))}/${Number(key.slice(8, 10))}`;
     const sleepDay = nights[todayKey] ? todayKey : latestDay(days, d => nights[d]);
     renderSleep(sleepDay ? nights[sleepDay] : null, sleptDays.length > 1 ? sleepAvg : null, sleepDay && sleepDay !== todayKey ? md(sleepDay) : '');
-    const hasVitals = d => totals[d] && (totals[d].heart.length || totals[d].oxygen.length);
+    const hasVitals = d => totals[d] && (totals[d].heart || totals[d].oxygen);
     const vitalDay = hasVitals(todayKey) ? todayKey : latestDay(days, hasVitals);
     renderHeart(vitalDay ? totals[vitalDay] : null, vitalDay && vitalDay !== todayKey ? md(vitalDay) : '');
     renderEnergy(energy, totals[todayKey].active_energy, true);
@@ -474,20 +499,20 @@
     const legend = el('div', undefined, 'home-legend'); for (const s of ['deep', 'core', 'rem']) legend.append(el('span', STAGE_NAMES[s], 'stage-label stage-'+s));
     bars($('home-sleep-week'), days, days.map(d => nights[d]), {label: '直近7日の睡眠時間', empty: '睡眠の記録はありません。', goal: 7*3600000, goalLabel: '7時間', stacked: true, legend,
       total: v => v.total, parts: v => SLEEP_STAGES.map(s => ({value: v.stages[s], color: `var(--sleep-${s})`, title: `${STAGE_NAMES[s]} ${hm(v.stages[s])}`})), short: v => (v.total/3600000).toFixed(1)+'h'});
-    const heartDays = days.map(d => vitalRange(totals[d].heart)), oxygenDays = days.map(d => vitalRange(totals[d].oxygen));
+    const heartDays = days.map(d => totals[d].heart), oxygenDays = days.map(d => totals[d].oxygen);
     const avgOf = list => { const k = list.filter(Boolean); return k.length ? k.reduce((a, r) => a+r.avg, 0)/k.length : null; };
     $('home-heart-avg').textContent = avgOf(heartDays) == null ? '' : `平均 ${num(avgOf(heartDays))} bpm`;
     $('home-oxygen-avg').textContent = avgOf(oxygenDays) == null ? '' : `平均 ${num(avgOf(oxygenDays))} %`;
     rangeChart($('home-heart-week'), days, heartDays, {label: '直近7日の心拍数', empty: '心拍数の記録はありません。', unit: 'bpm', color: 'var(--heart)', line: true, minPad: 4});
     rangeChart($('home-oxygen-week'), days, oxygenDays, {label: '直近7日の血中酸素', empty: '血中酸素の記録はありません。', unit: '%', color: 'var(--oxygen)', line: true, ref: 95, refLabel: '目安 95%', ceil: 100, minPad: 1});
-    const latest = kind => (typeof chartRecords !== 'undefined' ? chartRecords : []).find(r => r.kind === kind && r.user_id === userId);
+    const latest = kind => { const r = typeof latestRecords !== 'undefined' ? latestRecords[kind] : null; return r && r.user_id === userId ? r : null; };
     const measuredToday = kind => { const r = latest(kind); return !!r && dayKey(Date.parse(r.measured_at)) === todayKey; };
     const steps = totals[todayKey].steps, night = nights[todayKey], profile = summary?.profile;
     const bp = latest('blood_pressure'), weight = latest('body_composition');
     const bpHigh = !!(bp && profile && (bp.values.systolic > profile.bp_sys_high || bp.values.diastolic > profile.bp_dia_high));
     const today = energyBalance(energy?.current?.bmr, totals[todayKey].active_energy, energy?.current?.intake_kcal);
     const tick = v => v ? '✓' : '';
-    renderSummary([
+    const cards = [
       {label: '体重', value: weight ? num(weight.values.weight, 1) : '—', unit: 'kg', mark: tick(measuredToday('body_composition')),
         sub: diet?.remaining != null ? (diet.remaining <= 0 ? '目標に到達' : `目標まで ${num(diet.remaining, 1)} kg`) : measuredToday('body_composition') ? '今日測定済み' : '今日は未測定',
         state: measuredToday('body_composition') ? 'done' : ''},
@@ -499,8 +524,17 @@
         sub: night ? (sleptDays.length > 1 ? `平均 ${hm(sleepAvg)}` : '昨夜の記録') : '記録なし', state: night ? 'done' : ''},
       {label: '収支', value: today.balance == null ? '—' : `${today.balance > 0 ? '+' : today.balance < 0 ? '−' : '±'}${num(Math.abs(today.balance))}`, unit: 'kcal',
         sub: today.basis === 'bmr+active' ? '摂取−基礎代謝−活動' : today.basis === 'bmr' ? '摂取−基礎代謝' : '設定が必要', state: today.balance == null ? '' : today.balance <= 0 ? 'good' : 'warn'}
-    ], summaryText({remaining: diet?.remaining ?? null, change7: diet?.change7 ?? null, bpHigh, steps, stepGoal: STEP_GOAL,
-      sleep: night?.total ?? null, sleepAvg: sleptDays.length > 1 ? sleepAvg : null, balance: today.balance, evaluations: metrics?.summary || []}));
+    ];
+    const facts = {remaining: diet?.remaining ?? null, change7: diet?.change7 ?? null, bpHigh, steps, stepGoal: STEP_GOAL,
+      sleep: night?.total ?? null, sleepAvg: sleptDays.length > 1 ? sleepAvg : null, balance: today.balance};
+    renderSummary(cards, summaryText({...facts, evaluations: []}));
+    // The evaluations are the slowest request; the rest of Home is already drawn and they fill in when ready.
+    for (const id of ['home-eval-diet', 'home-eval-health']) if (!$(id).children.length) empty($(id), '評価を計算しています…');
+    metrics = await metricsRequest;
+    if (ticket !== serial) return;
+    if (metrics) { renderEvaluations($('home-eval-diet'), metrics.diet); renderEvaluations($('home-eval-health'), metrics.health); }
+    else for (const id of ['home-eval-diet', 'home-eval-health']) empty($(id), '評価を取得できませんでした。');
+    if (metrics?.summary?.length) renderSummary(cards, summaryText({...facts, evaluations: metrics.summary}));
   }
   $('home-goal-form').addEventListener('submit', async event => {
     event.preventDefault();

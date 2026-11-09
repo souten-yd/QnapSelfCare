@@ -90,3 +90,21 @@ console.log('Home in-bed sleep and latest-day fallback: passed');
 assert.equal(h.vitalRange([]), null);
 assert.equal(h.vitalRange(undefined), null);
 assert.deepEqual(h.vitalRange([60, 80, 70]), {min: 60, max: 80, avg: 70, n: 3});
+
+// Server daily aggregates -> per-day totals with each metric's busiest source.
+{
+  const days = ['2026-11-07', '2026-11-08'];
+  const {totals, source} = h.aggregateTotals([
+    ['2026-11-07', 'steps', 'iPhone', 50, 4000, 1, 200], ['2026-11-07', 'steps', 'Watch', 10, 3900, 1, 300],
+    ['2026-11-08', 'steps', 'iPhone', 40, 5000, 1, 200],
+    ['2026-11-07', 'heart_rate', 'Watch', 4, 280, 60, 80], ['2026-11-08', 'oxygen_saturation', 'Watch', 2, 194, 96, 98],
+    ['2026-11-08', 'walking_running_distance', 'iPhone', 3, 2500, 100, 1500], ['2026-10-01', 'steps', 'iPhone', 1, 9, 9, 9]], days);
+  assert.equal(totals['2026-11-07'].steps, 4000);            // busiest steps source only, no double counting
+  assert.equal(totals['2026-11-08'].distance, 2.5);
+  assert.deepEqual(totals['2026-11-07'].heart, {min: 60, max: 80, avg: 70, n: 4});   // watch-only vitals kept
+  assert.deepEqual(totals['2026-11-08'].oxygen, {min: 96, max: 98, avg: 97, n: 2});
+  assert.equal(totals['2026-11-08'].heart, null);
+  assert.equal(source, 'iPhone');
+  assert.equal(h.aggregateTotals([], days).totals['2026-11-07'].steps, null);
+  console.log('Home daily aggregates: passed');
+}
